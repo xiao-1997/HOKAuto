@@ -1,7 +1,7 @@
 workflows:
   build-deb:
     name: Build iOS .deb
-    max_build_duration: 60
+    max_build_duration: 120
     triggering:
       events:
         - push
@@ -19,7 +19,7 @@ workflows:
       - name: Build iOS app
         script: |
           xcodebuild -project HOKAuto.xcodeproj \
-            -scheme HOKAuto -configuration Release \
+            -scheme HOKAuto -configuration Debug \
             -destination 'generic/platform=iOS' \
             CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO -derivedDataPath build
