@@ -6,7 +6,14 @@ class AutomationEngine {
     var isRunning = false
     var onUpdate: (() -> Void)?
 
-    private let loginPoint = (x: 540, y: 960)
+    // 录制的真实坐标 (1242x2208 Landscape)
+    private let loginPoints = [(x: 1216, y: 954), (x: 1341, y: 742)]
+    private let closePoints = [
+        (x: 2066, y: 146),
+        (x: 2062, y: 158),
+        (x: 1901, y: 110),
+        (x: 1868, y: 138),
+    ]
 
     func run() {
         guard !isRunning else { return }
@@ -14,8 +21,6 @@ class AutomationEngine {
         status = "启动中..."
         logs = ""
         onUpdate?()
-
-        writePopupScript()
 
         log("启动 王者荣耀...")
         if let url = URL(string: "tencent1104466820://") {
@@ -32,16 +37,30 @@ class AutomationEngine {
                 sleep(3)
                 elapsed += 3
                 DispatchQueue.main.async {
-                    self.status = "视觉检测 \(elapsed)秒"
+                    self.status = "检测 \(elapsed)秒"
                     self.onUpdate?()
                 }
-                self.spawnAutotouch("play", "start", "/tmp/hok_popup.lua")
 
+                // 关闭弹窗（真实坐标）
+                for pt in self.closePoints {
+                    self.at("touchDown 0 \(pt.x) \(pt.y)")
+                    usleep(50000)
+                    self.at("touchUp 0 \(pt.x) \(pt.y)")
+                    usleep(150000)
+                }
+
+                // 图像识别关闭
+                self.at("play start /tmp/hok_popup.lua")
+
+                // 30秒后点登录
                 if elapsed >= 30 && elapsed < 33 {
                     DispatchQueue.main.async { self.status = "点击登录"; self.onUpdate?() }
-                    self.spawnAutotouch("touchDown", "0", "\(self.loginPoint.x)", "\(self.loginPoint.y)")
-                    usleep(50000)
-                    self.spawnAutotouch("touchUp", "0", "\(self.loginPoint.x)", "\(self.loginPoint.y)")
+                    for pt in self.loginPoints {
+                        self.at("touchDown 0 \(pt.x) \(pt.y)")
+                        usleep(50000)
+                        self.at("touchUp 0 \(pt.x) \(pt.y)")
+                        usleep(300000)
+                    }
                     DispatchQueue.main.async { self.log("已点击登录") }
                     break
                 }
@@ -54,84 +73,26 @@ class AutomationEngine {
     }
 
     private func writePopupScript() {
+        let imgDir = "/var/mobile/Library/AutoTouch/Scripts/Images"
         let lua = """
-        -- 弹窗关闭脚本 (多图片匹配)
-        local IMG_DIR = "/var/mobile/Library/AutoTouch/Scripts/Images"
-
-        -- 按钮组: 每组可配多张参考图，命中任意一张即点击该按钮
-        local buttonGroups = {
-            close = { -- X关闭按钮
-                IMG_DIR .. "/close_btn.png",
-                IMG_DIR .. "/x_btn.png",
-                IMG_DIR .. "/close_btn2.png",
-            },
-            cancel = { -- 取消按钮
-                IMG_DIR .. "/cancel_btn.png",
-                IMG_DIR .. "/cancel_btn2.png",
-            },
-            skip = { -- 暂不参与
-                IMG_DIR .. "/skip_btn.png",
-                IMG_DIR .. "/skip_btn2.png",
-                IMG_DIR .. "/skip_btn3.png",
-            },
-            later = { -- 稍后再说
-                IMG_DIR .. "/later_btn.png",
-                IMG_DIR .. "/later_btn2.png",
-            },
-            ok = { -- 确定
-                IMG_DIR .. "/ok_btn.png",
-                IMG_DIR .. "/ok_btn2.png",
-            },
-            back = { -- 返回按钮
-                IMG_DIR .. "/back_btn.png",
-                IMG_DIR .. "/back_btn2.png",
-            },
-        }
-
-        local function tryGroup(imgs)
-            for _, img in ipairs(imgs) do
-                if fileExists(img) then
-                    local x, y = findImage(img, 1, 0.7, nil, nil)
-                    if x > 0 and y > 0 then
-                        touchDown(0, x, y)
-                        usleep(50000)
-                        touchUp(0, x, y)
-                        return true
-                    end
-                end
-            end
-            return false
-        end
-
-        -- 优先级: 关闭X > 取消 > 暂不参与 > 稍后再说 > 确定 > 返回
-        if tryGroup(buttonGroups.close) then return end
-        if tryGroup(buttonGroups.cancel) then return end
-        if tryGroup(buttonGroups.skip) then return end
-        if tryGroup(buttonGroups.later) then return end
-        if tryGroup(buttonGroups.ok) then return end
-        if tryGroup(buttonGroups.back) then return end
-
-        -- 盲点角落
-        local pts = {{1900,150}, {2000,150}, {2100,150}, {1950,200}, {1900,250}}
-        for _, p in ipairs(pts) do
-            touchDown(0, p[1], p[2])
-            usleep(50000)
-            touchUp(0, p[1], p[2])
-            usleep(200000)
+        local imgs = {"\(imgDir)/close_btn.png","\(imgDir)/skip_btn.png","\(imgDir)/back_btn.png"}
+        for _,img in ipairs(imgs) do
+          if fileExists(img) then
+            local x,y=findImage(img,1,0.6,nil,nil)
+            if x>0 then touchDown(0,x,y) usleep(50000) touchUp(0,x,y) return end
+          end
         end
         """
-
         try? lua.write(toFile: "/tmp/hok_popup.lua", atomically: true, encoding: .utf8)
     }
 
-    private func spawnAutotouch(_ args: String...) {
-        let cArgs = args.map { strdup($0) }
+    private func at(_ args: String) {
+        let parts = args.components(separatedBy: " ")
+        let cArgs = parts.map { strdup($0) }
         defer { cArgs.forEach { free($0) } }
         var pid: pid_t = 0
-        if posix_spawn(&pid, "/usr/bin/autotouch", nil, nil, cArgs + [nil], nil) == 0 {
-            var status: Int32 = 0
-            waitpid(pid, &status, 0)
-        }
+        let ret = posix_spawn(&pid, "/usr/bin/autotouch", nil, nil, cArgs + [nil], nil)
+        if ret == 0 { var s: Int32 = 0; waitpid(pid, &s, 0) }
     }
 
     private func log(_ msg: String) { logs += msg + "\n" }
