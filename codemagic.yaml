@@ -25,6 +25,7 @@ workflows:
             CODE_SIGNING_ALLOWED=NO -derivedDataPath build
       - name: Create .deb
         script: |
+          brew install dpkg
           mkdir -p deb/DEBIAN deb/Applications
           FOUND=$(find build -name "HOKAuto.app" -type d | head -1)
           APP="${FOUND:-build/Build/Products/Debug-iphoneos/HOKAuto.app}"
