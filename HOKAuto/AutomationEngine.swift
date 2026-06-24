@@ -6,6 +6,9 @@ class AutomationEngine {
     var isRunning = false
     var onUpdate: (() -> Void)?
 
+    private let loginPoint = (x: 540, y: 960)
+    private let closePoints = [(x: 1100, y: 100), (x: 1150, y: 100), (x: 1200, y: 150)]
+
     func run() {
         guard !isRunning else { return }
         isRunning = true
@@ -22,16 +25,43 @@ class AutomationEngine {
         }
         onUpdate?()
 
-        var count = 10
-        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { t in
-            count -= 1
-            self.status = "等待... \(count + 1)秒"
-            self.onUpdate?()
-            if count <= 0 {
-                t.invalidate()
-                self.status = "完成"; self.log("完成")
-                self.isRunning = false; self.onUpdate?()
+        DispatchQueue.global().async {
+            var elapsed = 0
+            while elapsed < 60 {
+                sleep(5)
+                elapsed += 5
+                DispatchQueue.main.async { self.status = "检测 \(elapsed)秒"; self.onUpdate?() }
+
+                // 关闭弹窗
+                for pt in self.closePoints {
+                    self.at("touchDown 0 \(pt.x) \(pt.y)")
+                    usleep(50000)
+                    self.at("touchUp 0 \(pt.x) \(pt.y)")
+                    usleep(100000)
+                }
+
+                // 30秒后点登录
+                if elapsed == 30 {
+                    DispatchQueue.main.async { self.status = "点击登录"; self.onUpdate?() }
+                    self.at("touchDown 0 \(self.loginPoint.x) \(self.loginPoint.y)")
+                    usleep(50000)
+                    self.at("touchUp 0 \(self.loginPoint.x) \(self.loginPoint.y)")
+                    DispatchQueue.main.async { self.log("已点击登录") }
+                }
             }
+            DispatchQueue.main.async { self.status = "完成"; self.log("完成"); self.isRunning = false; self.onUpdate?() }
+        }
+    }
+
+    private func at(_ args: String) {
+        let parts = args.components(separatedBy: " ")
+        let cArgs = parts.map { strdup($0) }
+        defer { cArgs.forEach { free($0) } }
+        var pid: pid_t = 0
+        let ret = posix_spawn(&pid, "/usr/bin/autotouch", nil, nil, cArgs + [nil], nil)
+        if ret == 0 {
+            var status: Int32 = 0
+            waitpid(pid, &status, 0)
         }
     }
 
