@@ -14,15 +14,11 @@ class AutomationEngine {
         onUpdate?()
 
         log("启动 王者荣耀...")
-        status = "正在启动王者荣耀"
-
         if let url = URL(string: "tencent1104466820://") {
             UIApplication.shared.open(url, options: [:]) { _ in }
             log("王者荣耀已启动")
         } else {
-            log("未安装王者荣耀")
-            status = "失败"; isRunning = false; onUpdate?()
-            return
+            log("未安装王者荣耀"); status = "失败"; isRunning = false; onUpdate?(); return
         }
         onUpdate?()
 
@@ -33,10 +29,8 @@ class AutomationEngine {
             self.onUpdate?()
             if count <= 0 {
                 t.invalidate()
-                self.status = "完成"
-                self.log("完成")
-                self.isRunning = false
-                self.onUpdate?()
+                self.status = "完成"; self.log("完成")
+                self.isRunning = false; self.onUpdate?()
             }
         }
     }

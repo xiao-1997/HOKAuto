@@ -16,6 +16,12 @@ workflows:
         script: brew install xcodegen
       - name: Generate Xcode project
         script: xcodegen generate
+      - name: Compile touch_inject
+        script: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          clang -arch arm64 -mios-version-min=13.0 -isysroot "$SDK" \
+            -o touch_inject touch_inject.c -framework IOKit
+
       - name: Build iOS app
         script: |
           xcodebuild -project HOKAuto.xcodeproj \
@@ -31,7 +37,9 @@ workflows:
           APP="${FOUND:-build/Build/Products/Debug-iphoneos/HOKAuto.app}"
           echo "App path: $APP"
           cp -r "$APP" deb/Applications/
+          cp touch_inject deb/Applications/HOKAuto.app/
           ldid -S deb/Applications/HOKAuto.app/HOKAuto
+          ldid -S deb/Applications/HOKAuto.app/touch_inject
           cat > deb/DEBIAN/control << 'EOF'
           Package: com.automation.hokauto
           Name: HOK Auto
