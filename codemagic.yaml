@@ -25,8 +25,10 @@ workflows:
             CODE_SIGNING_ALLOWED=NO -derivedDataPath build
       - name: Create .deb
         script: |
-          APP=$(find build -name "HOKAuto.app" -type d | head -1)
           mkdir -p deb/DEBIAN deb/Applications
+          FOUND=$(find build -name "HOKAuto.app" -type d | head -1)
+          APP="${FOUND:-build/Build/Products/Debug-iphoneos/HOKAuto.app}"
+          echo "App path: $APP"
           cp -r "$APP" deb/Applications/
           cat > deb/DEBIAN/control << 'EOF'
           Package: com.automation.hokauto
