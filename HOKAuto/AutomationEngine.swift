@@ -7,7 +7,14 @@ class AutomationEngine {
     var isRunning = false
     var onUpdate: (() -> Void)?
 
-    private let loginPoint = (x: 1100, y: 400)  // 横屏登录按钮坐标
+    // 横屏坐标 (iPhone Plus: 1242x2208 landscape)
+    private let loginPoint = (x: 1100, y: 400)
+    // 常见弹窗关闭按钮位置
+    private let closePoints = [
+        (x: 1900, y: 200),  // 右上角
+        (x: 2000, y: 150),  // 右上角2
+        (x: 1800, y: 250),  // 右上角3
+    ]
 
     func run() {
         guard !isRunning else { return }
@@ -31,9 +38,11 @@ class AutomationEngine {
         }
         onUpdate?()
 
-        // 后台循环：每隔 5 秒关闭弹窗 + 检测登录
+        // 后台循环：每 5 秒检测弹窗 + 30 秒后点登录
         DispatchQueue.global().async {
+            let bin = Bundle.main.bundlePath + "/touch_inject"
             var elapsed = 0
+
             while elapsed < 60 {
                 sleep(5)
                 elapsed += 5
@@ -43,54 +52,29 @@ class AutomationEngine {
                     self.onUpdate?()
                 }
 
-                // 关闭弹窗
-                self.closePopup()
+                // 尝试关闭弹窗
+                for pt in self.closePoints {
+                    _ = system("\(bin) tap \(pt.x) \(pt.y)")
+                    usleep(100000)
+                }
 
-                if elapsed >= 30 {
+                // 30 秒后点击登录
+                if elapsed == 30 {
                     DispatchQueue.main.async {
-                        self.tapLogin()
+                        self.log("点击登录按钮")
+                        self.status = "点击登录"
                     }
-                    break
+                    _ = system("\(bin) tap \(self.loginPoint.x) \(self.loginPoint.y)")
                 }
             }
 
             DispatchQueue.main.async {
-                if self.isRunning {
-                    self.status = "完成"
-                    self.isRunning = false
-                    self.onUpdate?()
-                }
+                self.log("完成")
+                self.status = "完成"
+                self.isRunning = false
+                self.onUpdate?()
             }
         }
-    }
-
-    private func closePopup() {
-        // 写入并执行弹窗关闭 Lua 脚本
-        let script = """
-        local img = "/var/mobile/Library/AutoTouch/Scripts/Images/close_btn.png"
-        local x, y = findImage(img, 1, 0.7, nil, nil)
-        if x > 0 then
-            touchDown(0, x, y)
-            usleep(50000)
-            touchUp(0, x, y)
-        end
-        """
-
-        let path = "/tmp/hok_popup.lua"
-        try? script.write(toFile: path, atomically: true, encoding: .utf8)
-        _ = system("/usr/bin/autotouch play start \(path)")
-    }
-
-    private func tapLogin() {
-        log("点击登录按钮")
-        status = "点击登录"
-
-        let at = "/usr/bin/autotouch"
-        _ = system("\(at) touchDown 0 \(loginPoint.x) \(loginPoint.y)")
-        usleep(50000)
-        _ = system("\(at) touchUp 0 \(loginPoint.x) \(loginPoint.y)")
-
-        log("已点击登录")
     }
 
     private func log(_ msg: String) { logs += msg + "\n" }
