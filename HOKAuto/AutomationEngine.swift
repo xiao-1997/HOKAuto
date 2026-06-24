@@ -1,4 +1,5 @@
 import UIKit
+import Darwin
 
 class AutomationEngine {
     var status = "就绪"
@@ -50,30 +51,15 @@ class AutomationEngine {
         log("点击登录按钮 (\(loginPoint.x),\(loginPoint.y))")
         status = "点击登录"
 
-        // 写入 Lua 脚本到 AutoTouch 录制目录
-        let script = """
-        touchDown(0, \(loginPoint.x), \(loginPoint.y))
+        let at = "/usr/bin/autotouch"
+        _ = system("\(at) touchDown 0 \(loginPoint.x) \(loginPoint.y)")
         usleep(50000)
-        touchUp(0, \(loginPoint.x), \(loginPoint.y))
-        """
+        _ = system("\(at) touchUp 0 \(loginPoint.x) \(loginPoint.y)")
 
-        let path = "/private/var/mobile/Library/AutoTouch/Scripts/Records/hok_tap.lua"
-        try? script.write(toFile: path, atomically: true, encoding: .utf8)
-
-        // 通过 AutoTouch URL Scheme 执行脚本
-        if let url = URL(string: "autotouch://run/hok_tap.lua") {
-            UIApplication.shared.open(url, options: [:]) { _ in
-                self.log("已发送点击指令")
-                self.status = "完成"
-                self.isRunning = false
-                self.onUpdate?()
-            }
-        } else {
-            log("AutoTouch 未安装")
-            status = "完成(仅启动)"
-            isRunning = false
-            onUpdate?()
-        }
+        log("已点击登录")
+        status = "完成"
+        isRunning = false
+        onUpdate?()
     }
 
     private func log(_ msg: String) { logs += msg + "\n" }
