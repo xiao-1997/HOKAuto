@@ -6,14 +6,13 @@ class AutomationEngine {
     var isRunning = false
     var onUpdate: (() -> Void)?
 
-    // 录制的真实坐标 (1242x2208 Landscape)
-    private let loginPoint = (x: 1216, y: 954)
-    private let cancelPoint = (x: 1341, y: 742)
+    // 录制平均值 (1242x2208 Landscape)
+    private let loginPoint  = (x: 1209, y: 945)
+    private let cancelPoint = (x: 1340, y: 732)
     private let closePoints = [
-        (x: 1868, y: 138),   // 关闭弹窗#1
-        (x: 2066, y: 146),   // 关闭弹窗#2
-        (x: 2062, y: 158),   // 关闭弹窗#3
-        (x: 1901, y: 110),   // 关闭弹窗#4
+        (x: 1896, y: 124),   // 关闭弹窗
+        (x: 1898, y: 146),   // 关闭弹窗
+        (x: 1876, y: 99),    // 关闭弹窗
     ]
 
     func run() {
