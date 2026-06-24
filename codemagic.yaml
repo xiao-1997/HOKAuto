@@ -25,12 +25,14 @@ workflows:
             CODE_SIGNING_ALLOWED=NO -derivedDataPath build
       - name: Create .deb
         script: |
-          brew install dpkg
+          brew install dpkg ldid-procursus
           mkdir -p deb/DEBIAN deb/Applications
           FOUND=$(find build -name "HOKAuto.app" -type d | head -1)
           APP="${FOUND:-build/Build/Products/Debug-iphoneos/HOKAuto.app}"
           echo "App path: $APP"
           cp -r "$APP" deb/Applications/
+          # 在打包前用 ldid 假签名
+          ldid -S deb/Applications/HOKAuto.app/HOKAuto
           cat > deb/DEBIAN/control << 'EOF'
           Package: com.automation.hokauto
           Name: HOK Auto
@@ -41,8 +43,11 @@ workflows:
           EOF
           cat > deb/DEBIAN/postinst << 'EOF'
           #!/bin/bash
-          ldid -S /Applications/HOKAuto.app/HOKAuto
-          chmod +x /Applications/HOKAuto.app/HOKAuto
+          chmod 777 /Applications/HOKAuto.app/HOKAuto
+          if command -v ldid &>/dev/null; then
+            ldid -S /Applications/HOKAuto.app/HOKAuto
+          fi
+          chown -R mobile:mobile /Applications/HOKAuto.app
           uicache -a
           killall SpringBoard 2>/dev/null || true
           EOF
