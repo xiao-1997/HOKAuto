@@ -7,6 +7,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <mach/mach.h>
+#include <mach/mach_time.h>
 #include <IOKit/IOKitLib.h>
 
 int main(int argc, char *argv[]) {
@@ -15,7 +16,7 @@ int main(int argc, char *argv[]) {
     float x = atof(argv[1]), y = atof(argv[2]);
 
     mach_port_t master;
-    host_get_io_master(mach_host_self(), &master);
+    host_get_io_main(mach_host_self(), &master);
 
     CFMutableDictionaryRef match = IOServiceMatching("IOHIDSystem");
     io_iterator_t iter;
