@@ -67,19 +67,12 @@ class AutomationEngine {
     private func closePopup() {
         // 写入并执行弹窗关闭 Lua 脚本
         let script = """
-        -- 自动关闭弹窗脚本
-        local popups = {
-            "close_btn.png",   -- 关闭按钮
-            "cancel_btn.png",  -- 取消按钮
-        }
-        for _, img in ipairs(popups) do
-            local x, y = findImage(img, 1, 0.8, nil, nil)
-            if x > 0 then
-                touchDown(0, x, y)
-                usleep(50000)
-                touchUp(0, x, y)
-                break
-            end
+        local img = "/var/mobile/Library/AutoTouch/Scripts/Images/close_btn.png"
+        local x, y = findImage(img, 1, 0.7, nil, nil)
+        if x > 0 then
+            touchDown(0, x, y)
+            usleep(50000)
+            touchUp(0, x, y)
         end
         """
 
