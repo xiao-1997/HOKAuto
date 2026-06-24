@@ -7,12 +7,13 @@ class AutomationEngine {
     var onUpdate: (() -> Void)?
 
     // 录制的真实坐标 (1242x2208 Landscape)
-    private let loginPoints = [(x: 1216, y: 954), (x: 1341, y: 742)]
+    private let loginPoint = (x: 1216, y: 954)
+    private let cancelPoint = (x: 1341, y: 742)
     private let closePoints = [
-        (x: 2066, y: 146),
-        (x: 2062, y: 158),
-        (x: 1901, y: 110),
-        (x: 1868, y: 138),
+        (x: 1868, y: 138),   // 关闭弹窗#1
+        (x: 2066, y: 146),   // 关闭弹窗#2
+        (x: 2062, y: 158),   // 关闭弹窗#3
+        (x: 1901, y: 110),   // 关闭弹窗#4
     ]
 
     func run() {
@@ -41,26 +42,29 @@ class AutomationEngine {
                     self.onUpdate?()
                 }
 
-                // 关闭弹窗（真实坐标）
+                // 先点取消
+                self.at("touchDown 0 \(self.cancelPoint.x) \(self.cancelPoint.y)")
+                usleep(50000)
+                self.at("touchUp 0 \(self.cancelPoint.x) \(self.cancelPoint.y)")
+                usleep(300000)
+
+                // 关闭弹窗（4个位置逐个点）
                 for pt in self.closePoints {
                     self.at("touchDown 0 \(pt.x) \(pt.y)")
                     usleep(50000)
                     self.at("touchUp 0 \(pt.x) \(pt.y)")
-                    usleep(150000)
+                    usleep(200000)
                 }
 
-                // 图像识别关闭
+                // 图像识别补充
                 self.at("play start /tmp/hok_popup.lua")
 
                 // 30秒后点登录
                 if elapsed >= 30 && elapsed < 33 {
                     DispatchQueue.main.async { self.status = "点击登录"; self.onUpdate?() }
-                    for pt in self.loginPoints {
-                        self.at("touchDown 0 \(pt.x) \(pt.y)")
-                        usleep(50000)
-                        self.at("touchUp 0 \(pt.x) \(pt.y)")
-                        usleep(300000)
-                    }
+                    self.at("touchDown 0 \(self.loginPoint.x) \(self.loginPoint.y)")
+                    usleep(50000)
+                    self.at("touchUp 0 \(self.loginPoint.x) \(self.loginPoint.y)")
                     DispatchQueue.main.async { self.log("已点击登录") }
                     break
                 }
