@@ -1,5 +1,6 @@
 import Foundation
-import Combine
+import SwiftUI
+import UIKit
 
 @MainActor
 class AutomationEngine: ObservableObject {
@@ -18,7 +19,7 @@ class AutomationEngine: ObservableObject {
                 // Step 1: 连接 WDA
                 log("检查 WDA 连接...")
                 let wdaOk = try await WDAHelper.checkConnection()
-                log(wdaOk ? "WDA 已连接" : "WDA 未连接，尝试 URL Scheme 启动")
+                log(wdaOk ? "WDA 已连接" : "WDA 未连接")
 
                 // Step 2: 启动王者荣耀
                 status = "正在启动王者荣耀"
@@ -27,7 +28,8 @@ class AutomationEngine: ObservableObject {
                 if wdaOk {
                     try await WDAHelper.launchApp(bundleId: "com.tencent.smoba")
                 } else {
-                    await WDAHelper.launchViaURLScheme()
+                    log("通过 URL Scheme 启动")
+                    WDAHelper.openViaScheme()
                 }
                 log("王者荣耀已启动")
 
@@ -38,8 +40,8 @@ class AutomationEngine: ObservableObject {
                 }
 
                 // Step 4: 关闭
-                status = "正在关闭王者荣耀"
-                log("关闭 王者荣耀...")
+                status = "正在关闭"
+                log("关闭...")
                 if wdaOk {
                     try await WDAHelper.pressHome()
                 }
@@ -74,7 +76,7 @@ struct WDAHelper {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body = ["capabilities": ["bundleId": bundleId]]
+        let body: [String: Any] = ["capabilities": ["bundleId": bundleId]]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         _ = try await URLSession.shared.data(for: req)
     }
@@ -87,24 +89,10 @@ struct WDAHelper {
         _ = try await URLSession.shared.data(for: req)
     }
 
-    static func launchViaURLScheme() async {
+    /// 通过 URL Scheme 启动（备用方案）
+    static func openViaScheme() {
         if let url = URL(string: "tencent1104466820://") {
-            await UIApplication.shared.open(url)
+            UIApplication.shared.open(url)
         }
-    }
-}
-
-// MARK: - Color Helper
-
-extension Color {
-    init(hex: String) {
-        let scanner = Scanner(string: hex)
-        var rgb: UInt64 = 0
-        scanner.scanHexInt64(&rgb)
-        self.init(
-            red: Double((rgb >> 16) & 0xFF) / 255,
-            green: Double((rgb >> 8) & 0xFF) / 255,
-            blue: Double(rgb & 0xFF) / 255
-        )
     }
 }

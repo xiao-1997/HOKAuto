@@ -1,5 +1,18 @@
 import SwiftUI
 
+extension Color {
+    init(hex: String) {
+        let s = hex.trimmingCharacters(in: .alphanumerics.inverted)
+        var rgb: UInt64 = 0
+        Scanner(string: s).scanHexInt64(&rgb)
+        self.init(
+            red: Double((rgb >> 16) & 0xFF) / 255,
+            green: Double((rgb >> 8) & 0xFF) / 255,
+            blue: Double(rgb & 0xFF) / 255
+        )
+    }
+}
+
 struct ContentView: View {
     @StateObject private var engine = AutomationEngine()
 
@@ -8,9 +21,10 @@ struct ContentView: View {
             Color(hex: "0D0D1A").ignoresSafeArea()
 
             VStack(spacing: 24) {
-                // 状态卡片
                 VStack(spacing: 12) {
-                    Image(systemName: engine.isRunning ? "arrow.triangle.2.circlepath" : "checkmark.circle.fill")
+                    Image(systemName: engine.isRunning
+                        ? "arrow.triangle.2.circlepath"
+                        : "checkmark.circle.fill")
                         .font(.system(size: 48))
                         .foregroundColor(.white)
                         .symbolEffect(.rotate, value: engine.isRunning)
@@ -22,12 +36,13 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity)
                 .padding(32)
                 .background(
-                    LinearGradient(colors: [Color(hex: "667eea"), Color(hex: "764ba2")],
-                                   startPoint: .topLeading, endPoint: .bottomTrailing)
+                    LinearGradient(
+                        colors: [Color(hex: "667eea"), Color(hex: "764ba2")],
+                        startPoint: .topLeading, endPoint: .bottomTrailing
+                    )
                 )
                 .cornerRadius(16)
 
-                // 日志
                 ScrollViewReader { proxy in
                     ScrollView {
                         Text(engine.logs.isEmpty ? "点击启动..." : engine.logs)
@@ -46,7 +61,6 @@ struct ContentView: View {
                     }
                 }
 
-                // 按钮
                 Button(action: engine.run) {
                     HStack(spacing: 10) {
                         if engine.isRunning {
