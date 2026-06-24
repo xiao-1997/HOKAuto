@@ -15,7 +15,6 @@ class AutomationEngine {
         logs = ""
         onUpdate?()
 
-        // 写入弹窗检测 Lua 脚本
         writePopupScript()
 
         log("启动 王者荣耀...")
@@ -36,11 +35,8 @@ class AutomationEngine {
                     self.status = "视觉检测 \(elapsed)秒"
                     self.onUpdate?()
                 }
-
-                // 执行 Lua 视觉脚本关闭弹窗
                 self.spawnAutotouch("play", "start", "/tmp/hok_popup.lua")
 
-                // 30秒后点登录
                 if elapsed >= 30 && elapsed < 33 {
                     DispatchQueue.main.async { self.status = "点击登录"; self.onUpdate?() }
                     self.spawnAutotouch("touchDown", "0", "\(self.loginPoint.x)", "\(self.loginPoint.y)")
@@ -59,14 +55,36 @@ class AutomationEngine {
 
     private func writePopupScript() {
         let lua = """
-        -- 弹窗关闭脚本 (图像识别 + 文字识别)
-        local imgs = {
-            "/var/mobile/Library/AutoTouch/Scripts/Images/close_btn.png",
-            "/var/mobile/Library/AutoTouch/Scripts/Images/cancel_btn.png",
-            "/var/mobile/Library/AutoTouch/Scripts/Images/x_btn.png",
+        -- 弹窗关闭脚本 (多图片匹配)
+        local IMG_DIR = "/var/mobile/Library/AutoTouch/Scripts/Images"
+
+        -- 按钮组: 每组可配多张参考图，命中任意一张即点击该按钮
+        local buttonGroups = {
+            close = { -- X关闭按钮
+                IMG_DIR .. "/close_btn.png",
+                IMG_DIR .. "/x_btn.png",
+                IMG_DIR .. "/close_btn2.png",
+            },
+            cancel = { -- 取消按钮
+                IMG_DIR .. "/cancel_btn.png",
+                IMG_DIR .. "/cancel_btn2.png",
+            },
+            skip = { -- 暂不参与
+                IMG_DIR .. "/skip_btn.png",
+                IMG_DIR .. "/skip_btn2.png",
+                IMG_DIR .. "/skip_btn3.png",
+            },
+            later = { -- 稍后再说
+                IMG_DIR .. "/later_btn.png",
+                IMG_DIR .. "/later_btn2.png",
+            },
+            ok = { -- 确定
+                IMG_DIR .. "/ok_btn.png",
+                IMG_DIR .. "/ok_btn2.png",
+            },
         }
 
-        local function closeByImage()
+        local function tryGroup(imgs)
             for _, img in ipairs(imgs) do
                 if fileExists(img) then
                     local x, y = findImage(img, 1, 0.7, nil, nil)
@@ -74,7 +92,6 @@ class AutomationEngine {
                         touchDown(0, x, y)
                         usleep(50000)
                         touchUp(0, x, y)
-                        syslog("closed: " .. img)
                         return true
                     end
                 end
@@ -82,44 +99,21 @@ class AutomationEngine {
             return false
         end
 
-        local function closeByOCR()
-            -- OCR 检测常见弹窗文字
-            local texts = ocr()
-            if texts then
-                for _, t in ipairs(texts) do
-                    local txt = t.text or ""
-                    -- 检测到弹窗关键词，在附近查找 X 关闭
-                    if string.find(txt, "活动") or string.find(txt, "公告")
-                       or string.find(txt, "福利") or string.find(txt, "商城")
-                       or string.find(txt, "更新") or string.find(txt, "提示") then
-                        -- 在文字右侧10px处尝试点击（可能的X按钮位置）
-                        local cx = (t.x or 100) + (t.width or 200) + 10
-                        local cy = t.y or 200
-                        touchDown(0, cx, cy)
-                        usleep(50000)
-                        touchUp(0, cx, cy)
-                        return true
-                    end
-                end
-            end
-            return false
-        end
+        -- 优先级: 关闭X > 取消 > 暂不参与 > 稍后再说 > 确定
+        if tryGroup(buttonGroups.close) then return end
+        if tryGroup(buttonGroups.cancel) then return end
+        if tryGroup(buttonGroups.skip) then return end
+        if tryGroup(buttonGroups.later) then return end
+        if tryGroup(buttonGroups.ok) then return end
 
-        local function closeByCoord()
-            -- 盲点常见关闭位置（横屏右上角区域）
-            local pts = {{1900,150}, {2000,150}, {2100,150}, {1950,200}}
-            for _, p in ipairs(pts) do
-                touchDown(0, p[1], p[2])
-                usleep(50000)
-                touchUp(0, p[1], p[2])
-                usleep(200000)
-            end
+        -- 盲点角落
+        local pts = {{1900,150}, {2000,150}, {2100,150}, {1950,200}, {1900,250}}
+        for _, p in ipairs(pts) do
+            touchDown(0, p[1], p[2])
+            usleep(50000)
+            touchUp(0, p[1], p[2])
+            usleep(200000)
         end
-
-        if not closeByImage() then
-            closeByOCR()
-        end
-        closeByCoord()
         """
 
         try? lua.write(toFile: "/tmp/hok_popup.lua", atomically: true, encoding: .utf8)
