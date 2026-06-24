@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 @MainActor
 class AutomationEngine: ObservableObject {
@@ -12,31 +13,29 @@ class AutomationEngine: ObservableObject {
         status = "启动中..."
         logs = ""
 
-        Task {
-            // 直接通过 URL Scheme 启动王者荣耀
-            log("启动 王者荣耀...")
-            status = "正在启动王者荣耀"
+        log("启动 王者荣耀...")
+        status = "正在启动王者荣耀"
 
-            if let url = URL(string: "tencent1104466820://") {
-                if UIApplication.shared.canOpenURL(url) {
-                    await UIApplication.shared.open(url)
-                    log("王者荣耀已启动")
-                } else {
-                    log("未安装王者荣耀")
-                }
-            } else {
-                log("URL Scheme 无效")
+        if let url = URL(string: "tencent1104466820://") {
+            UIApplication.shared.open(url, options: [:]) { _ in
+                print("完成")
             }
+            log("王者荣耀已启动")
+        } else {
+            log("URL Scheme 无效")
+        }
 
-            // 等待
-            for i in 1...10 {
-                status = "等待中... \(11 - i)秒"
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
+        // 等待 10 秒
+        var count = 10
+        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { t in
+            count -= 1
+            self.status = "等待中... \(count)秒"
+            if count <= 0 {
+                t.invalidate()
+                self.status = "完成"
+                self.log("完成")
+                self.isRunning = false
             }
-
-            status = "完成"
-            log("完成")
-            isRunning = false
         }
     }
 
