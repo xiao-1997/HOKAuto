@@ -31,7 +31,7 @@ class AutomationEngine {
         }
         onUpdate?()
 
-        // Step 2: 等待游戏加载后点击登录
+        // Step 2: 等待 30 秒后点击登录
         var elapsed = 0
         Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { t in
             elapsed += 5
@@ -50,13 +50,30 @@ class AutomationEngine {
         log("点击登录按钮 (\(loginPoint.x),\(loginPoint.y))")
         status = "点击登录"
 
-        let cmd = "/usr/bin/stouch touch \(loginPoint.x) \(loginPoint.y)"
-        _ = system(cmd)
+        // 写入 Lua 脚本到 AutoTouch 录制目录
+        let script = """
+        touchDown(0, \(loginPoint.x), \(loginPoint.y))
+        usleep(50000)
+        touchUp(0, \(loginPoint.x), \(loginPoint.y))
+        """
 
-        log("已点击登录按钮")
-        status = "完成"
-        isRunning = false
-        onUpdate?()
+        let path = "/private/var/mobile/Library/AutoTouch/Scripts/Records/hok_tap.lua"
+        try? script.write(toFile: path, atomically: true, encoding: .utf8)
+
+        // 通过 AutoTouch URL Scheme 执行脚本
+        if let url = URL(string: "autotouch://run/hok_tap.lua") {
+            UIApplication.shared.open(url, options: [:]) { _ in
+                self.log("已发送点击指令")
+                self.status = "完成"
+                self.isRunning = false
+                self.onUpdate?()
+            }
+        } else {
+            log("AutoTouch 未安装")
+            status = "完成(仅启动)"
+            isRunning = false
+            onUpdate?()
+        }
     }
 
     private func log(_ msg: String) { logs += msg + "\n" }
