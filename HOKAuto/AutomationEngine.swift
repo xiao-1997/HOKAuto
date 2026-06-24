@@ -7,7 +7,7 @@ class AutomationEngine {
     var isRunning = false
     var onUpdate: (() -> Void)?
 
-    private let loginPoint = (x: 207, y: 760)
+    private let loginPoint = (x: 1100, y: 400)  // 横屏登录按钮坐标
 
     func run() {
         guard !isRunning else { return }
