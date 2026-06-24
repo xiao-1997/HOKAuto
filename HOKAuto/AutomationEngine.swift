@@ -50,7 +50,7 @@ class AutomationEngine {
         log("点击登录按钮 (\(loginPoint.x),\(loginPoint.y))")
         status = "点击登录"
 
-        let cmd = "stouch touch \(loginPoint.x) \(loginPoint.y)"
+        let cmd = "/usr/bin/stouch touch \(loginPoint.x) \(loginPoint.y)"
         _ = system(cmd)
 
         log("已点击登录按钮")
