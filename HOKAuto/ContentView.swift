@@ -27,11 +27,9 @@ struct ContentView: View {
                         : "checkmark.circle.fill")
                         .font(.system(size: 48))
                         .foregroundColor(.white)
-                        .symbolEffect(.rotate, value: engine.isRunning)
 
                     Text(engine.status)
-                        .font(.title2).bold()
-                        .foregroundColor(.white)
+                        .font(.title2)                        .foregroundColor(.white)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(32)
@@ -70,7 +68,7 @@ struct ContentView: View {
                             Text("🚀 启动自动化")
                         }
                     }
-                    .font(.title3).bold()
+                    .font(.title3)
                     .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
                     .frame(height: 54)
