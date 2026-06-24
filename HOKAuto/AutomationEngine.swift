@@ -82,6 +82,10 @@ class AutomationEngine {
                 IMG_DIR .. "/ok_btn.png",
                 IMG_DIR .. "/ok_btn2.png",
             },
+            back = { -- 返回按钮
+                IMG_DIR .. "/back_btn.png",
+                IMG_DIR .. "/back_btn2.png",
+            },
         }
 
         local function tryGroup(imgs)
@@ -99,12 +103,13 @@ class AutomationEngine {
             return false
         end
 
-        -- 优先级: 关闭X > 取消 > 暂不参与 > 稍后再说 > 确定
+        -- 优先级: 关闭X > 取消 > 暂不参与 > 稍后再说 > 确定 > 返回
         if tryGroup(buttonGroups.close) then return end
         if tryGroup(buttonGroups.cancel) then return end
         if tryGroup(buttonGroups.skip) then return end
         if tryGroup(buttonGroups.later) then return end
         if tryGroup(buttonGroups.ok) then return end
+        if tryGroup(buttonGroups.back) then return end
 
         -- 盲点角落
         local pts = {{1900,150}, {2000,150}, {2100,150}, {1950,200}, {1900,250}}
