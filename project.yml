@@ -1,0 +1,19 @@
+name: HOKAuto
+options:
+  bundleIdPrefix: com.automation
+  deploymentTarget:
+    iOS: "15.0"
+
+targets:
+  HOKAuto:
+    type: application
+    platform: iOS
+    sources: [HOKAuto]
+    settings:
+      base:
+        INFOPLIST_FILE: HOKAuto/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.automation.hokauto
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: NO

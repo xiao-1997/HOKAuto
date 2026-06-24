@@ -1,0 +1,41 @@
+workflows:
+  build-deb:
+    name: Build iOS .deb
+    max_build_duration: 60
+    environment:
+      xcode: latest
+    scripts:
+      - name: Install xcodegen
+        script: brew install xcodegen
+      - name: Generate Xcode project
+        script: xcodegen generate
+      - name: Build iOS app
+        script: |
+          xcodebuild -project HOKAuto.xcodeproj \
+            -scheme HOKAuto -configuration Release \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO -derivedDataPath build
+      - name: Create .deb
+        script: |
+          APP=$(find build -name "HOKAuto.app" -type d | head -1)
+          mkdir -p deb/DEBIAN deb/Applications
+          cp -r "$APP" deb/Applications/
+          cat > deb/DEBIAN/control << 'EOF'
+          Package: com.automation.hokauto
+          Name: HOK Auto
+          Version: 1.0
+          Architecture: iphoneos-arm
+          Description: 王者荣耀自动化
+          Section: Applications
+          EOF
+          cat > deb/DEBIAN/postinst << 'EOF'
+          #!/bin/bash
+          chmod +x /Applications/HOKAuto.app/HOKAuto
+          uicache -a
+          killall SpringBoard 2>/dev/null || true
+          EOF
+          chmod +x deb/DEBIAN/postinst
+          dpkg-deb -b deb hok_auto_1.0_iphoneos-arm.deb
+    artifacts:
+      - hok_auto_1.0_iphoneos-arm.deb
