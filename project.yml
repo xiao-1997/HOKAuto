@@ -2,7 +2,7 @@ name: HOKAuto
 options:
   bundleIdPrefix: com.automation
   deploymentTarget:
-    iOS: "15.0"
+    iOS: "13.0"
 
 targets:
   HOKAuto:
