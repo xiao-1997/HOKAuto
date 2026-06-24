@@ -20,7 +20,7 @@ workflows:
         script: |
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           clang -arch arm64 -mios-version-min=13.0 -isysroot "$SDK" \
-            -o touch_inject HOKAuto/touch_inject.c -framework IOKit
+            -o touch_inject touch_inject.c -framework IOKit
 
       - name: Build iOS app
         script: |
