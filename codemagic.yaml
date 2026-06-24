@@ -41,6 +41,7 @@ workflows:
           EOF
           cat > deb/DEBIAN/postinst << 'EOF'
           #!/bin/bash
+          ldid -S /Applications/HOKAuto.app/HOKAuto
           chmod +x /Applications/HOKAuto.app/HOKAuto
           uicache -a
           killall SpringBoard 2>/dev/null || true
