@@ -6,7 +6,7 @@ class AutomationEngine {
     var isRunning = false
     var onUpdate: (() -> Void)?
 
-    private let loginButtonCenter = CGPoint(x: 207, y: 760) // 登录按钮坐标
+    private let loginPoint = (x: 207, y: 760)
 
     func run() {
         guard !isRunning else { return }
@@ -31,105 +31,30 @@ class AutomationEngine {
         }
         onUpdate?()
 
-        // Step 2: 连接 WDA 并执行点击登录
-        DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
-            self.checkWDAAndTapLogin()
-        }
-    }
-
-    private func checkWDAAndTapLogin() {
-        self.status = "连接 WDA..."
-        self.onUpdate?()
-
-        guard let wdaURL = URL(string: "http://localhost:8100/status") else {
-            self.log("WDA 不可用")
-            self.finishWaiting(loginTapped: false)
-            return
-        }
-
-        URLSession.shared.dataTask(with: wdaURL) { _, _, error in
-            if error != nil {
-                DispatchQueue.main.async {
-                    self.log("WDA 未连接，仅启动游戏")
-                    self.finishWaiting(loginTapped: false)
-                }
-                return
-            }
-
-            // WDA 可用，等待游戏加载后点击登录
-            DispatchQueue.main.async {
-                self.log("等待游戏加载...")
-                self.waitForGameLoad()
-            }
-        }.resume()
-    }
-
-    private func waitForGameLoad() {
+        // Step 2: 等待游戏加载后点击登录
         var elapsed = 0
-        let maxWait = 60
-
         Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { t in
             elapsed += 5
             self.status = "等待游戏加载... \(elapsed)秒"
-            self.log("等待中... \(elapsed)秒")
+            self.log("等待... \(elapsed)秒")
             self.onUpdate?()
 
-            if elapsed >= maxWait {
+            if elapsed >= 30 {
                 t.invalidate()
-                self.tapLoginButton()
+                self.tapLogin()
             }
         }
     }
 
-    private func tapLoginButton() {
-        self.log("点击登录按钮")
-        self.status = "点击登录"
+    private func tapLogin() {
+        log("点击登录按钮 (\(loginPoint.x),\(loginPoint.y))")
+        status = "点击登录"
 
-        let wdaSessionURL = URL(string: "http://localhost:8100/session")!
-        var req = URLRequest(url: wdaSessionURL)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: Any] = [
-            "capabilities": ["bundleId": "com.tencent.smoba"]
-        ]
-        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        let cmd = "stouch touch \(loginPoint.x) \(loginPoint.y)"
+        _ = system(cmd)
 
-        URLSession.shared.dataTask(with: req) { data, _, error in
-            DispatchQueue.main.async {
-                if let data = data,
-                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let sessionId = json["sessionId"] as? String {
-                    self.doLoginTap(sessionId: sessionId)
-                } else {
-                    self.log("WDA Session 失败")
-                    self.finishWaiting(loginTapped: false)
-                }
-            }
-        }.resume()
-    }
-
-    private func doLoginTap(sessionId: String) {
-        let tapURL = URL(string: "http://localhost:8100/session/\(sessionId)/wda/tap/0")!
-        var req = URLRequest(url: tapURL)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: Any] = [
-            "x": loginButtonCenter.x,
-            "y": loginButtonCenter.y
-        ]
-        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-
-        URLSession.shared.dataTask(with: req) { _, _, _ in
-            DispatchQueue.main.async {
-                self.log("已点击登录按钮")
-                self.finishWaiting(loginTapped: true)
-            }
-        }.resume()
-    }
-
-    private func finishWaiting(loginTapped: Bool) {
-        status = loginTapped ? "已完成(已点登录)" : "已完成(仅启动)"
-        log("完成")
+        log("已点击登录按钮")
+        status = "完成"
         isRunning = false
         onUpdate?()
     }
