@@ -6,6 +6,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <spawn.h>
+#include <sys/wait.h>
 #include <pthread.h>
 
 // IOKit forward declarations (iOS runtime)
@@ -19,7 +21,7 @@ static io_connect_t g_hid = 0;
 static int hid_ensure() {
     if (g_hid) return 0;
     mach_port_t master;
-    host_get_io_main(mach_host_self(), &master);
+    IOMainPort(bootstrap_port, &master);
     io_iterator_t iter;
     IOServiceGetMatchingServices(master, IOServiceMatching("IOHIDSystem"), &iter);
     io_service_t svc = IOIteratorNext(iter);
@@ -109,8 +111,8 @@ int ve_screenshot(const char *path) {
     fputs(cmd, f); fclose(f);
     // 调用 autotouch
     pid_t pid;
-    char *args[] = {"/usr/bin/autotouch","play","start","/tmp/_ve_scr.lua",NULL};
-    posix_spawn(&pid, args[0], NULL, NULL, args, NULL);
+    const char *args[] = {"/usr/bin/autotouch","play","start","/tmp/_ve_scr.lua",NULL};
+    posix_spawn(&pid, args[0], NULL, NULL, (char* const*)args, NULL);
     int st; waitpid(pid, &st, 0);
     return 0;
 }
