@@ -1,39 +1,72 @@
 import UIKit
 
-/// DeepSeek API 视觉识别客户端
+/// DeepSeek AI 语义分析客户端
 struct DeepSeekClient {
     static let baseURL = "https://api.deepseek.com"
-    static var apiKey = "" // 在 App 设置中配置
+    static var apiKey = "sk-123c8d699d4147898446a34a33b38f8d"
 
-    /// 分析截图，识别按钮和文字
-    static func analyzeScreenshot(_ image: UIImage, prompt: String,
-                                  completion: @escaping (Result<String, Error>) -> Void) {
-        guard let imageData = image.jpegData(compressionQuality: 0.6) else {
-            completion(.failure(NSError(domain: "ImageError", code: -1)))
-            return
-        }
-        let base64 = imageData.base64EncodedString()
+    // MARK: - 语义分析
 
-        let fullPrompt = """
-        你是一个iOS游戏自动化助手。分析这张王者荣耀游戏截图(1242x2208横屏)：
-        1. 列出所有可见的按钮（名称+坐标x,y）
-        2. 列出弹窗和关闭按钮位置
-        3. 列出"暂不参与"、"取消"、"确定"、"返回"按钮位置
-        \(prompt)
-        返回JSON格式: {"buttons":[{"name":"","x":0,"y":0}],"popups":[{"text":"","close_x":0,"close_y":0}]}
+    /// 分析屏幕状态，返回操作建议
+    static func analyzeScreen(context: [String: Any],
+                              completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        let prompt = """
+        你是王者荣耀游戏自动化助手。屏幕分辨率1242x2208横屏。
+        当前状态: \(context["status"] as? String ?? "未知")
+        检测到的按钮: \(context["buttons"] as? String ?? "无")
+        最近操作: \(context["lastAction"] as? String ?? "无")
+
+        请返回JSON操作指令: {"action":"click"/"swipe"/"wait","target":"按钮名称","x":0,"y":0,"reason":"分析原因"}
         """
 
+        chat(prompt) { result in
+            switch result {
+            case .success(let text):
+                if let json = extractJSON(from: text),
+                   let data = json.data(using: .utf8),
+                   let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    completion(.success(dict))
+                } else {
+                    completion(.success(["raw": text]))
+                }
+            case .failure(let e): completion(.failure(e))
+            }
+        }
+    }
+
+    /// 弹窗识别分析
+    static func analyzePopup(visibleTexts: [String],
+                             completion: @escaping (Result<String, Error>) -> Void) {
+        let textList = visibleTexts.joined(separator: "、")
+        let prompt = """
+        王者荣耀弹窗分析。可见文字: \(textList.isEmpty ? "无" : textList)
+        返回JSON: {"type":"close"/"cancel"/"skip"/"ok"/"none","reason":"分析"}
+        """
+        chat(prompt) { result in
+            switch result {
+            case .success(let text):
+                if let json = extractJSON(from: text) {
+                    completion(.success(json))
+                } else {
+                    completion(.success("{\"type\":\"none\"}"))
+                }
+            case .failure(let e): completion(.failure(e))
+            }
+        }
+    }
+
+    // MARK: - Text Chat
+
+    static func chat(_ prompt: String,
+                     completion: @escaping (Result<String, Error>) -> Void) {
         let body: [String: Any] = [
             "model": "deepseek-chat",
             "messages": [
-                ["role": "system", "content": "你是游戏自动化助手，分析截图返回按钮坐标JSON"],
-                ["role": "user", "content": [
-                    ["type": "text", "text": fullPrompt],
-                    ["type": "image_url", "image_url": ["url": "data:image/jpeg;base64," + base64]]
-                ]]
+                ["role": "system", "content": "你是一个游戏自动化助手。只返回JSON，不要其他文字。"],
+                ["role": "user", "content": prompt]
             ],
             "temperature": 0.1,
-            "max_tokens": 1000
+            "max_tokens": 500
         ]
 
         var req = URLRequest(url: URL(string: "\(baseURL)/v1/chat/completions")!)
@@ -41,7 +74,7 @@ struct DeepSeekClient {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        req.timeoutInterval = 30
+        req.timeoutInterval = 15
 
         URLSession.shared.dataTask(with: req) { data, _, error in
             if let error = error { completion(.failure(error)); return }
@@ -54,27 +87,11 @@ struct DeepSeekClient {
                 completion(.failure(NSError(domain: "API", code: -1)))
                 return
             }
-            completion(.success(content))
+            completion(.success(content.trimmingCharacters(in: .whitespacesAndNewlines)))
         }.resume()
     }
 
-    /// 提取按钮坐标
-    static func parseButtons(from text: String) -> [(name: String, x: Float, y: Float)] {
-        var results: [(name: String, x: Float, y: Float)] = []
-        guard let data = extractJSON(from: text)?.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let buttons = json["buttons"] as? [[String: Any]]
-        else { return results }
-
-        for btn in buttons {
-            if let name = btn["name"] as? String,
-               let x = btn["x"] as? Double,
-               let y = btn["y"] as? Double {
-                results.append((name, Float(x), Float(y)))
-            }
-        }
-        return results
-    }
+    // MARK: - Helpers
 
     private static func extractJSON(from text: String) -> String? {
         if let start = text.firstIndex(of: "{"),

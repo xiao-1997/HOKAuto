@@ -85,45 +85,35 @@ class AutomationEngine {
         """.write(toFile: "/tmp/hok_popup.lua", atomically: true, encoding: .utf8)
     }
 
-    // MARK: - DeepSeek Vision
+    // MARK: - DeepSeek AI 语义分析
 
     private func deepSeekAnalyze() {
         guard !DeepSeekClient.apiKey.isEmpty else { return }
 
-        // 1. 用 AutoTouch 截图
-        playLua("screenshot")
+        let ctx: [String: Any] = [
+            "status": status,
+            "buttons": "取消(1340,732) 关闭(1896,124) 关闭(1898,146) 关闭(1876,99) 登录(1209,945)",
+            "lastAction": logs.components(separatedBy: "\n").last ?? ""
+        ]
 
-        // 2. 读取截图文件
-        let path = "/tmp/hok_screen.jpg"
-        guard let img = UIImage(contentsOfFile: path) else {
-            self.log("截图失败"); return
-        }
-
-        // 3. 发送 DeepSeek 分析
-        self.status = "DeepSeek分析..."
-        self.onUpdate?()
-
-        DeepSeekClient.analyzeScreenshot(img, prompt: "识别按鈕位置") { result in
+        DeepSeekClient.analyzeScreen(context: ctx) { result in
             DispatchQueue.main.async {
                 switch result {
-                case .success(let text):
-                    self.log("DeepSeek: \(text.prefix(100))")
-                    let buttons = DeepSeekClient.parseButtons(from: text)
-                    // 4. 点击识别到的按钮
-                    DispatchQueue.global().async {
-                        for btn in buttons {
-                            if btn.name.contains("关闭") || btn.name.contains("X") ||
-                               btn.name.contains("取消") || btn.name.contains("暫不") {
-                                self.log("AI点击: \(btn.name) (\(btn.x),\(btn.y))")
-                                self.at("touchDown 0 \(Int(btn.x)) \(Int(btn.y))")
+                case .success(let dict):
+                    if let action = dict["action"] as? String {
+                        self.log("AI建议: \(action) \(dict["reason"] as? String ?? "")")
+                        if action == "click",
+                           let x = dict["x"] as? Double,
+                           let y = dict["y"] as? Double {
+                            DispatchQueue.global().async {
+                                self.at("touchDown 0 \(Int(x)) \(Int(y))")
                                 usleep(50000)
-                                self.at("touchUp 0 \(Int(btn.x)) \(Int(btn.y))")
-                                usleep(200000)
+                                self.at("touchUp 0 \(Int(x)) \(Int(y))")
                             }
                         }
                     }
                 case .failure(let e):
-                    self.log("DeepSeek错误: \(e.localizedDescription)")
+                    self.log("AI错误: \(e.localizedDescription)")
                 }
             }
         }
