@@ -77,28 +77,47 @@ struct DeepSeekClient {
         let body: [String: Any] = [
             "model": "deepseek-chat",
             "messages": [
-                ["role": "system", "content": "王者荣耀自动化助手。返回JSON: {\"action\":\"click\",\"x\":数字,\"y\":数字}"],
+                ["role": "system", "content": "返回JSON: {\"ok\":true}"],
                 ["role": "user", "content": prompt]
             ],
             "temperature": 0.1,
-            "max_tokens": 300
+            "max_tokens": 50
         ]
 
-        var req = URLRequest(url: URL(string: "https://api.deepseek.com/v1/chat/completions")!)
+        let url = URL(string: "https://api.deepseek.com/v1/chat/completions")!
+        var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        req.timeoutInterval = 15
+        req.timeoutInterval = 5
 
-        URLSession.shared.dataTask(with: req) { data, _, error in
-            if let error = error { completion(.failure(error)); return }
+        Logger.log("DeepSeek: POST \(url.absoluteString)")
+        URLSession.shared.dataTask(with: req) { data, resp, error in
+            if let error = error {
+                let msg = "DeepSeek ERR: \(error.localizedDescription)"
+                Logger.log(msg)
+                completion(.failure(NSError(domain: "DeepSeek", code: -1, userInfo: [NSLocalizedDescriptionKey: msg])))
+                return
+            }
+            if let http = resp as? HTTPURLResponse {
+                Logger.log("DeepSeek HTTP: \(http.statusCode)")
+            }
+            if let data = data, let raw = String(data: data, encoding: .utf8)?.prefix(200) {
+                Logger.log("DeepSeek RSP: \(raw)")
+            }
             guard let data = data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let choices = json["choices"] as? [[String: Any]],
                   let msg = choices.first?["message"] as? [String: Any],
                   let content = msg["content"] as? String
-            else { completion(.failure(NSError(domain: "API", code: -1))); return }
+            else {
+                let err = "DeepSeek PARSE FAIL"
+                Logger.log(err)
+                completion(.failure(NSError(domain: "DeepSeek", code: -1, userInfo: [NSLocalizedDescriptionKey: err])))
+                return
+            }
+            Logger.log("DeepSeek OK: \(content.prefix(100))")
             completion(.success(content.trimmingCharacters(in: .whitespacesAndNewlines)))
         }.resume()
     }

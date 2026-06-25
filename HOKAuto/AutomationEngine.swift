@@ -26,21 +26,17 @@ class AutomationEngine {
         log("测试 DeepSeek 连接...")
         status = "测试AI连接"
 
-        DeepSeekClient.chat("ping") { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success:
-                    self.log("AI 连接成功 ✅")
-                    self.status = "AI已连接,启动中..."
-                    self.toast("✅ AI已连接 → 启动")
-                    self.launchAndRun()
+        // 快速AI检测(2s超时), 不可用则直接离线启动
+        DispatchQueue.global().async {
+            let sem = DispatchSemaphore(value: 0)
+            var aiOk = false
+            DeepSeekClient.chat("ping") { if case .success = $0 { aiOk = true }; sem.signal() }
+            _ = sem.wait(timeout: .now() + 2)
 
-                case .failure(let e):
-                    self.log("AI不可用: \(e.localizedDescription.prefix(80))")
-                    self.status = "离线模式启动"
-                    self.toast("⚠️ AI离线 → 纯坐标模式")
-                    self.launchAndRun()
-                }
+            DispatchQueue.main.async {
+                if aiOk { self.log("AI已连接"); self.toast("✅ AI已连接") }
+                else { self.log("AI不可用,离线坐标模式"); self.toast("⚠️ 离线模式") }
+                self.launchAndRun()
             }
         }
     }
