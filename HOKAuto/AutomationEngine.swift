@@ -63,7 +63,6 @@ class AutomationEngine {
         } else { log("失败"); isRunning = false; onUpdate?(); return }
         onUpdate?()
         mainTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in self.tick() }
-        dsTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in self.checkDS() }
     }
 
     // MARK: - 4层视觉主循环
