@@ -102,27 +102,56 @@ class AutomationEngine {
 
     func saveMacro(name: String) -> Bool { MacroRecorder.save(name) }
 
-    // MARK: - AI (VL2 视觉 + 降级纯文本)
+    // MARK: - VL2 视觉识别(主) + 坐标映射
 
     private func triggerAI() {
         guard aiCallCount < aiMaxCalls else { return }
         if let last = lastAICall, Date().timeIntervalSince(last) < 15 { return }
         aiCallCount += 1; lastAICall = Date()
-        Logger.log("AI \(aiCallCount)/\(aiMaxCalls)")
+        Logger.log("VL2 \(aiCallCount)/\(aiMaxCalls)")
 
         guard let img = ScreenCapture.capture(maxWidth: 600, quality: 0.4) else { return }
-        DeepSeekClient.analyze(image: img, prompt: "游戏1242x2208横屏。识别弹窗关闭按钮坐标,返回JSON:{\"x\":数字,\"y\":数字}") { r in
-            if case .success(let t) = r,
-               let x = self.extractCoord(t, "x"), let y = self.extractCoord(t, "y") {
-                DispatchQueue.main.async { self.click(Float(x), Float(y)) }
+        let imgW = Float(img.size.width * img.scale)
+        let imgH = Float(img.size.height * img.scale)
+
+        let prompt = """
+        王者荣耀横屏截图(\(Int(imgW))x\(Int(imgH)))。找到弹窗上的按钮并返回JSON坐标:
+        {"cancel_button":{"x":0,"y":0},"close_button":{"x":0,"y":0},"skip_button":{"x":0,"y":0}}
+        没有某按钮则填null。原点左上角。
+        """
+
+        DeepSeekClient.analyze(image: img, prompt: prompt) { r in
+            if case .success(let t) = r {
+                Logger.log("VL2: \(t.prefix(120))")
+
+                // 坐标映射: 图片 → 屏幕 (1242x2208)
+                let sw: Float = 1242, sh: Float = 2208
+                let sx = sw / imgW, sy = sh / imgH
+
+                // 解析按钮坐标
+                let btns: [(String, String)] = [("cancel_button","取消"),("close_button","关闭"),("skip_button","暂不参与")]
+                for (key, label) in btns {
+                    if let cx = self.extractCoord(t, key, "x"),
+                       let cy = self.extractCoord(t, key, "y") {
+                        let mx = cx * sx, my = cy * sy
+                        if mx > 0, my > 0 {
+                            DispatchQueue.main.async {
+                                self.click(mx, my)
+                                Logger.log("VL2点击:\(label) (\(Int(mx)),\(Int(my)))")
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 
-    private func extractCoord(_ t: String, _ k: String) -> Int? {
-        guard let r = t.range(of: "\"\(k)\":\\s*(\\d+)", options: .regularExpression),
+    /// 解析嵌套JSON坐标: "cancel_button":{"x":200,"y":380} → Float
+    private func extractCoord(_ t: String, _ btn: String, _ axis: String) -> Float? {
+        let pattern = "\"\(btn)\"[^}]*\"\(axis)\":\\s*(\\d+)"
+        guard let r = t.range(of: pattern, options: .regularExpression),
               let n = t[r].range(of: "\\d+", options: .regularExpression) else { return nil }
-        return Int(t[n])
+        return Float(t[n])
     }
 
     // MARK: - Helpers
