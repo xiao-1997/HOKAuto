@@ -21,7 +21,16 @@ struct ScreenCapture {
     }
 
     private static func captureRaw() -> UIImage? {
-        if let img = UIGetScreenImage()?.takeUnretainedValue() as? UIImage { return img }
+        // 动态加载 UIGetScreenImage（私有API，编译时不可见）
+        if let handle = dlopen(nil, RTLD_NOW) {
+            if let fn = dlsym(handle, "UIGetScreenImage") {
+                typealias GetScreenFn = @convention(c) () -> Unmanaged<UIImage>?
+                let getScreen = unsafeBitCast(fn, to: GetScreenFn.self)
+                if let img = getScreen()?.takeUnretainedValue() { dlclose(handle); return img }
+                dlclose(handle)
+            }
+        }
+        // 降级：本app截图
         guard let w = UIApplication.shared.windows.first else { return nil }
         let r = UIGraphicsImageRenderer(bounds: w.bounds)
         return r.image { _ in w.drawHierarchy(in: w.bounds, afterScreenUpdates: false) }
