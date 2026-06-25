@@ -1,7 +1,5 @@
 import UIKit
 
-// MARK: - Engine
-
 class AutomationEngine {
     var status = "就绪"
     var logs = ""
@@ -14,17 +12,14 @@ class AutomationEngine {
     func run() {
         guard !isRunning else { return }
         isRunning = true; status = "启动中..."; logs = ""; onUpdate?()
-
         writeLua()
 
         log("启动 王者荣耀...")
         if let url = URL(string: "tencent1104466820://") {
-            UIApplication.shared.open(url, options: [:]) { _ in }
-            log("已启动")
+            UIApplication.shared.open(url, options: [:]) { _ in }; log("已启动")
         } else { log("失败"); status = "失败"; isRunning = false; onUpdate?(); return }
         onUpdate?()
 
-        // 后台执行 Lua 主循环
         DispatchQueue.global().async {
             self.runLua("main")
             DispatchQueue.main.async {
@@ -32,64 +27,118 @@ class AutomationEngine {
                 self.isRunning = false; self.onUpdate?(); self.dsTimer?.invalidate()
             }
         }
-
-        // DeepSeek 监听 (每 3 秒检查)
-        dsTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in
-            self.checkDeepSeekRequest()
-        }
+        dsTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in self.checkDS() }
     }
 
-    // MARK: - DeepSeek Fallback
+    // MARK: - DeepSeek + 自学习
 
-    private func checkDeepSeekRequest() {
+    private func checkDS() {
         let reqFile = "/tmp/ds_request.txt"
+        let learnFile = "/tmp/ds_learn.txt"  // 自学习请求
         guard FileManager.default.fileExists(atPath: reqFile) else { return }
-        // 读取请求参数
-        let prompt = (try? String(contentsOfFile: reqFile)) ?? "analyze popup"
+
+        let prompt = (try? String(contentsOfFile: reqFile)) ?? "analyze"
         try? FileManager.default.removeItem(atPath: reqFile)
 
-        status = "DeepSeek 分析..."
+        status = "DeepSeek..."
         onUpdate?()
 
-        // 读截图
         guard let img = UIImage(contentsOfFile: "/tmp/_ds_screen.jpg"),
-              let data = img.jpegData(compressionQuality: 0.4)
-        else { log("截图读取失败"); return }
-
+              let data = img.jpegData(compressionQuality: 0.4) else { return }
         let b64 = data.base64EncodedString()
-        let aiPrompt = "王者荣耀1242x2208横屏。识别弹窗上的按钮名称和坐标。返回JSON: {\"buttons\":[{\"name\":\"按钮名\",\"x\":坐标,\"y\":坐标}]}"
 
-        DeepSeekClient.chatWithImage(prompt: aiPrompt, base64Image: b64) { result in
+        DeepSeekClient.chatWithImage(prompt: "王者荣耀1242x2208横屏。列出弹窗上所有按钮名称和坐标(JSON)。对未识别的按钮描述其外观特征。{\"buttons\":[{\"name\":\"\",\"x\":0,\"y\":0,\"desc\":\"外观描述\"}]}", base64Image: b64) { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success(let text):
-                    self.log("AI结果: \(text.prefix(80))")
-                    // 写回结果 → Lua 读取并执行点击
+                    self.log("AI: \(text.prefix(100))")
+                    // 写回结果给 Lua 执行点击
                     try? text.write(toFile: "/tmp/ds_response.txt", atomically: true, encoding: .utf8)
-                    // Lua 读取后会删除此文件
+
+                    // 自学习：提取按钮坐标，保存对应图片
+                    self.learnFromAI(text)
                 case .failure(let e):
                     self.log("AI错误: \(e.localizedDescription)")
-                    try? "{\"buttons\":[]}".write(toFile: "/tmp/ds_response.txt", atomically: true, encoding: .utf8)
+                    try? "{}".write(toFile: "/tmp/ds_response.txt", atomically: true, encoding: .utf8)
                 }
             }
         }
     }
 
-    // MARK: - Lua Script
+    /// 从AI结果中学习：截取按钮区域保存为模板
+    private func learnFromAI(_ aiText: String) {
+        // 解析按钮坐标
+        let pattern = #""name"\s*:\s*"([^"]+)"[^}]*"x"\s*:\s*(\d+)[^}]*"y"\s*:\s*(\d+)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
+        let matches = regex.matches(in: aiText, range: NSRange(aiText.startIndex..., in: aiText))
+
+        for match in matches.prefix(5) {
+            guard let nameRange = Range(match.range(at: 1), in: aiText),
+                  let xRange = Range(match.range(at: 2), in: aiText),
+                  let yRange = Range(match.range(at: 3), in: aiText) else { continue }
+
+            let name = String(aiText[nameRange]).trimmingCharacters(in: .alphanumerics.inverted)
+            let x = Int(String(aiText[xRange])) ?? 0
+            let y = Int(String(aiText[yRange])) ?? 0
+            guard x > 0, y > 0, !name.isEmpty, name.count < 30 else { continue }
+
+            // 保存按钮截图到模板库（80x60 区域）
+            let safeName = name.replacingOccurrences(of: "/", with: "_")
+                             .replacingOccurrences(of: " ", with: "_")
+            let fileName = "ai_\(safeName)_\(Int(Date().timeIntervalSince1970)).png"
+            let captureLua = """
+            keepScreen(true)
+            snapshot("\(imgDir)/\(fileName)", \(x-40), \(y-30), 80, 60)
+            keepScreen(false)
+            """
+
+            let tmpPath = "/tmp/learn_\(fileName.replacingOccurrences(of: ".png", with: "")).lua"
+            try? captureLua.write(toFile: tmpPath, atomically: true, encoding: .utf8)
+
+            // 后台截取（不阻塞）
+            DispatchQueue.global().async {
+                let cmd = "su mobile -c '/usr/bin/autotouch play start \(tmpPath)'"
+                let cArgs: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sh"), strdup("-c"), strdup(cmd), nil]
+                defer { cArgs.forEach { if let p = $0 { free(p) } } }
+                var pid: pid_t = 0
+                posix_spawn(&pid, "/bin/sh", nil, nil, cArgs, nil)
+                var s: Int32 = 0; waitpid(pid, &s, 0)
+            }
+
+            log("学习: \(name) → \(fileName)")
+        }
+    }
+
+    // MARK: - Lua
 
     private func writeLua() {
         let D = imgDir
         let lua = """
-        -- hok_main.lua - findImage(3秒超时) → DeepSeek兜底
         local D = "\(D)"
         local BUTTONS = {
             cancel = {imgs={D.."/cancel_btn.png"}},
-            close  = {imgs={D.."/close_btn.png",D.."/close_btn2.png",D.."/x_btn.png"}, fb={{1896,124},{1876,99},{2062,146}}},
+            close  = {imgs={D.."/close_btn.png",D.."/close_btn2.png",D.."/x_btn.png"}, fb={{1896,124},{1876,99}}},
             skip   = {imgs={D.."/skip_btn.png"}},
             login  = {imgs={D.."/login_btn.png"}},
         }
+        -- 动态加载 AI 学习到的模板
+        local function loadAITemplates()
+            local ai = {}
+            local f = io.popen("ls "..D.."/ai_*.png 2>/dev/null")
+            if f then
+                for line in f:lines() do
+                    local name = line:match("ai_(.+)_%d+%.png")
+                    if name then
+                        if not ai[name] then ai[name] = {} end
+                        table.insert(ai[name], D.."/"..line)
+                    end
+                end
+                f:close()
+            end
+            return ai
+        end
         local function match(imgs, ms)
-            local deadline = os.time() + (ms or 3000) / 1000
+            local deadline = os.time() + (ms or 3)
             while os.time() < deadline do
                 for _,img in ipairs(imgs) do
                     if fileExists(img) then
@@ -103,43 +152,50 @@ class AutomationEngine {
             end
             return nil
         end
-        local function tap(x,y) touchDown(0,x,y) usleep(50000) touchUp(0,x,y) end
-        local function closePopups()
-            for _,name in ipairs({"cancel","close","skip"}) do
+        local function matchAll(ms)
+            local ai = loadAITemplates()
+            local order = {"cancel","close","skip"}
+            for _,name in ipairs(order) do
                 local b = BUTTONS[name]
-                local p = match(b.imgs, 3)
-                if p then tap(p[1],p[2]); return true,name end
+                local p = match(b.imgs, ms)
+                if p then return p, name end
             end
-            -- 本地未匹配 → 触发 DeepSeek
-            keepScreen(true) snapshot("/tmp/_ds_screen.jpg") keepScreen(false)
-            local f = io.open("/tmp/ds_request.txt","w")
-            if f then f:write("popup"); f:close() end
-            -- 等待 Swift 写回 ds_response.txt
-            for i=1,20 do
-                usleep(500000)
-                if fileExists("/tmp/ds_response.txt") then
-                    local r = io.open("/tmp/ds_response.txt")
-                    if r then
-                        local txt = r:read("*a"); r:close()
-                        os.remove("/tmp/ds_response.txt")
-                        local x = tonumber(string.match(txt, '"x":(%d+)')) or 600
-                        local y = tonumber(string.match(txt, '"y":(%d+)')) or 400
-                        tap(x, y)
-                        return true, "ai"
-                    end
-                    break
-                end
+            -- 匹配 AI 学到的模板
+            for name, imgs in pairs(ai) do
+                local p = match(imgs, 1)
+                if p then return p, "ai_"..name end
             end
-            -- 全失败→盲点
-            for _,pt in ipairs(BUTTONS.close.fb) do tap(pt[1],pt[2]) usleep(200000) end
-            return false
+            return nil
         end
+        local function tap(x,y) touchDown(0,x,y) usleep(50000) touchUp(0,x,y) end
         local loginDone = false
         for i=1,20 do
-            closePopups()
+            local p, name = matchAll(3)
+            if p then tap(p[1],p[2])
+            else
+                keepScreen(true) snapshot("/tmp/_ds_screen.jpg") keepScreen(false)
+                local f = io.open("/tmp/ds_request.txt","w")
+                if f then f:write("popup"); f:close() end
+                for j=1,20 do
+                    usleep(500000)
+                    if fileExists("/tmp/ds_response.txt") then
+                        local r = io.open("/tmp/ds_response.txt")
+                        if r then
+                            local txt = r:read("*a"); r:close()
+                            os.remove("/tmp/ds_response.txt")
+                            local x = tonumber(string.match(txt, '"x":(%d+)')) or 0
+                            local y = tonumber(string.match(txt, '"y":(%d+)')) or 0
+                            if x>0 then tap(x,y) end
+                        end
+                        break
+                    end
+                end
+                -- 盲点兜底
+                for _,pt in ipairs(BUTTONS.close.fb) do tap(pt[1],pt[2]) usleep(200000) end
+            end
             if i>=6 and not loginDone then
-                local p = match(BUTTONS.login.imgs, 3)
-                if p then tap(p[1],p[2]); loginDone = true end
+                local lp = match(BUTTONS.login.imgs, 3)
+                if lp then tap(lp[1],lp[2]); loginDone = true end
             end
             usleep(2000000)
         end
@@ -150,11 +206,11 @@ class AutomationEngine {
     // MARK: - Helpers
 
     private func runLua(_ name: String) {
-        let cmd = "su mobile -c '/usr/bin/autotouch play start /tmp/\(name).lua'"
-        let cArgs: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sh"), strdup("-c"), strdup(cmd), nil]
-        defer { cArgs.forEach { if let p = $0 { free(p) } } }
+        let c = "su mobile -c '/usr/bin/autotouch play start /tmp/\(name).lua'"
+        let a: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sh"), strdup("-c"), strdup(c), nil]
+        defer { a.forEach { if let p = $0 { free(p) } } }
         var pid: pid_t = 0
-        posix_spawn(&pid, "/bin/sh", nil, nil, cArgs, nil)
+        posix_spawn(&pid, "/bin/sh", nil, nil, a, nil)
         var s: Int32 = 0; waitpid(pid, &s, 0)
     }
 
