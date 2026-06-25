@@ -34,13 +34,22 @@ struct ContentView: View {
                 .background(Color(hex: "1A1A2E")).cornerRadius(12)
                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.08)))
 
-                // 启动按钮
-                Button(action: startEngine) {
-                    Text(isRunning ? "执行中..." : "🚀 启动自动化")
-                        .font(.system(size: 20, weight: .bold)).foregroundColor(.white)
-                        .frame(maxWidth: .infinity).frame(height: 54)
-                        .background(isRunning ? Color.gray : Color(hex: "667eea")).cornerRadius(14)
-                }.disabled(isRunning)
+                // 启动/停止按钮
+                if isRunning {
+                    Button(action: stopEngine) {
+                        Text("⏹ 停止")
+                            .font(.system(size: 20, weight: .bold)).foregroundColor(.white)
+                            .frame(maxWidth: .infinity).frame(height: 54)
+                            .background(Color.red).cornerRadius(14)
+                    }
+                } else {
+                    Button(action: startEngine) {
+                        Text("🚀 启动自动化")
+                            .font(.system(size: 20, weight: .bold)).foregroundColor(.white)
+                            .frame(maxWidth: .infinity).frame(height: 54)
+                            .background(Color(hex: "667eea")).cornerRadius(14)
+                    }
+                }
 
                 // 保存按钮
                 if !isRunning {
@@ -79,10 +88,14 @@ struct ContentView: View {
     private func startEngine() {
         engine.onUpdate = { status = engine.status; logs = engine.logs; isRunning = engine.isRunning }
         engine.run()
-        FloatingHUD.shared.onSave = { name in
-            _ = engine.saveMacro(name: name)
-            refreshMacros()
-        }
+        FloatingHUD.shared.onSave = { name in _ = engine.saveMacro(name: name); refreshMacros() }
+    }
+
+    private func stopEngine() {
+        engine.isRunning = false
+        engine.status = "已停止"
+        logs = engine.logs
+        isRunning = false
     }
 
     private func refreshMacros() {

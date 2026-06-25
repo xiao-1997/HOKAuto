@@ -60,13 +60,15 @@ class AutomationEngine {
 
         // ④ OCR
         if let screen = ScreenCapture.capture(maxWidth: 400, quality: 0.3) {
-            for h in LocalVision.detectKeywords(screen) {
-                click(h.x, h.y); Logger.log("OCR: \(h.text)"); break
+            if let first = LocalVision.detectKeywords(screen).first {
+                click(first.x, first.y); Logger.log("OCR: \(first.text)")
             }
         }
 
-        // ⑤ AI
-        if aiCallCount < aiMaxCalls, let last = lastAICall, Date().timeIntervalSince(last) < 15 {} else {
+        // ⑤ AI (每15s一次, OCR无结果时)
+        let now = Date()
+        if aiCallCount < aiMaxCalls,
+           lastAICall == nil || now.timeIntervalSince(lastAICall!) >= 15 {
             triggerAI()
         }
 
@@ -100,19 +102,24 @@ class AutomationEngine {
 
     func saveMacro(name: String) -> Bool { MacroRecorder.save(name) }
 
-    // MARK: - AI
+    // MARK: - AI (VL2 视觉 + 降级纯文本)
 
     private func triggerAI() {
+        guard aiCallCount < aiMaxCalls else { return }
+        if let last = lastAICall, Date().timeIntervalSince(last) < 15 { return }
         aiCallCount += 1; lastAICall = Date()
-        guard let img = ScreenCapture.capture(maxWidth: 400, quality: 0.3) else { return }
-        DeepSeekClient.analyze(image: img, prompt: "弹窗关闭按钮坐标JSON") { r in
-            if case .success(let t) = r, let x = self.extract(t,"x"), let y = self.extract(t,"y") {
+        Logger.log("AI \(aiCallCount)/\(aiMaxCalls)")
+
+        guard let img = ScreenCapture.capture(maxWidth: 600, quality: 0.4) else { return }
+        DeepSeekClient.analyze(image: img, prompt: "游戏1242x2208横屏。识别弹窗关闭按钮坐标,返回JSON:{\"x\":数字,\"y\":数字}") { r in
+            if case .success(let t) = r,
+               let x = self.extractCoord(t, "x"), let y = self.extractCoord(t, "y") {
                 DispatchQueue.main.async { self.click(Float(x), Float(y)) }
             }
         }
     }
 
-    private func extract(_ t: String, _ k: String) -> Int? {
+    private func extractCoord(_ t: String, _ k: String) -> Int? {
         guard let r = t.range(of: "\"\(k)\":\\s*(\\d+)", options: .regularExpression),
               let n = t[r].range(of: "\\d+", options: .regularExpression) else { return nil }
         return Int(t[n])
