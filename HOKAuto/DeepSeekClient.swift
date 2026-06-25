@@ -15,7 +15,7 @@ struct DeepSeekClient {
         let b64 = data.base64EncodedString()
 
         let body: [String: Any] = [
-            "model": "deepseek-v4-pro",
+            "model": "deepseek-vl2",
             "messages": [
                 ["role": "user", "content": [
                     ["type": "text", "text": prompt],
