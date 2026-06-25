@@ -6,138 +6,136 @@ class AutomationEngine {
     var isRunning = false
     var onUpdate: (() -> Void)?
 
-    private let loginPoint  = (x: 1209, y: 945)
-    private let cancelPoint = (x: 1340, y: 732)
-    private let closePoints = [(x: 1896, y: 124), (x: 1898, y: 146), (x: 1876, y: 99)]
+    // MARK: - Run
 
     func run() {
         guard !isRunning else { return }
         isRunning = true; status = "启动中..."; logs = ""; onUpdate?()
 
-        // 写入 Lua 脚本
-        writeScripts()
+        writeLuaScripts()
 
+        // 1. 启动王者荣耀
         log("启动 王者荣耀...")
         if let url = URL(string: "tencent1104466820://") {
             UIApplication.shared.open(url, options: [:]) { _ in }
-            log("王者荣耀已启动")
-        } else { log("未安装王者荣耀"); status = "失败"; isRunning = false; onUpdate?(); return }
+            log("已启动")
+        } else {
+            log("未安装游戏"); status = "失败"; isRunning = false; onUpdate?(); return
+        }
         onUpdate?()
 
+        // 2. 后台执行 Lua 主循环
         DispatchQueue.global().async {
-            var elapsed = 0
-            while elapsed < 60 {
-                sleep(3); elapsed += 3
-                DispatchQueue.main.async { self.status = "检测 \(elapsed)秒"; self.onUpdate?() }
+            self.runLua("hok_main")
 
-                // === 第一层: 坐标盲点 ===
-                self.at("touchDown 0 \(self.cancelPoint.x) \(self.cancelPoint.y)")
-                usleep(50000)
-                self.at("touchUp 0 \(self.cancelPoint.x) \(self.cancelPoint.y)")
-                usleep(300000)
+            DispatchQueue.main.async {
+                self.status = "完成"; self.log("完成")
+                self.isRunning = false; self.onUpdate?()
+            }
+        }
 
-                for pt in self.closePoints {
-                    self.at("touchDown 0 \(pt.x) \(pt.y)")
-                    usleep(50000)
-                    self.at("touchUp 0 \(pt.x) \(pt.y)")
-                    usleep(200000)
-                }
+        // 3. DeepSeek 轮询监听（每5秒检查请求文件）
+        deepSeekPoll()
+    }
 
-                // === 第二层: AutoTouch 图像识别 ===
-                self.playLua("hok_popup")
+    // MARK: - DeepSeek 轮询
 
-                // === 第三层: DeepSeek 视觉(每15秒) ===
-                if elapsed % 15 == 0 {
-                    DispatchQueue.main.async { self.deepSeekAnalyze() }
-                }
+    private func deepSeekPoll() {
+        Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
+            guard self.isRunning else { return }
 
-                // 登录
-                if elapsed >= 30 && elapsed < 33 {
-                    DispatchQueue.main.async { self.status = "点击登录"; self.onUpdate?() }
-                    self.at("touchDown 0 \(self.loginPoint.x) \(self.loginPoint.y)")
-                    usleep(50000)
-                    self.at("touchUp 0 \(self.loginPoint.x) \(self.loginPoint.y)")
-                    DispatchQueue.main.async { self.log("已点击登录") }
-                    break
+            let reqFile = "/tmp/ds_request.txt"
+            guard FileManager.default.fileExists(atPath: reqFile) else { return }
+
+            // Lua 请求了 DeepSeek 分析
+            self.status = "AI分析中..."
+            self.onUpdate?()
+
+            // 读截图 → 上传 DeepSeek
+            let img = UIImage(contentsOfFile: "/tmp/_ds_screen.png")
+            guard let imageData = img?.jpegData(compressionQuality: 0.5) else { return }
+            let b64 = imageData.base64EncodedString()
+            let prompt = "分析王者荣耀截图(1242x2208)，识别弹窗按钮、关闭按钮坐标，返回JSON: {\"action\":\"click\",\"x\":坐标,\"y\":坐标}"
+
+            DeepSeekClient.chatWithImage(prompt: prompt, base64Image: b64) { result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let text):
+                        self.log("AI: \(text.prefix(80))")
+                        let outFile = "/tmp/ds_response.txt"
+                        try? text.write(toFile: outFile, atomically: true, encoding: .utf8)
+                    case .failure:
+                        try? "{}".write(toFile: "/tmp/ds_response.txt", atomically: true, encoding: .utf8)
+                    }
+                    try? FileManager.default.removeItem(atPath: reqFile)
                 }
             }
-            DispatchQueue.main.async { self.status = "完成"; self.log("完成"); self.isRunning = false; self.onUpdate?() }
         }
     }
 
-    private func writeScripts() {
-        // 截图脚本
-        try? "keepScreen(true)\nsnapshot(\"/tmp/hok_screen.jpg\")\nkeepScreen(false)\n"
+    // MARK: - Lua Scripts
+
+    private func writeLuaScripts() {
+        let imgDir = "/var/mobile/Library/AutoTouch/Scripts/Images"
+
+        let mainLua = """
+        local D = "\(imgDir)"
+        local BUTTONS = {
+            cancel = { imgs={D.."/cancel_btn.png"} },
+            close  = { imgs={D.."/close_btn.png", D.."/close_btn2.png", D.."/x_btn.png"}, fb={{1896,124},{1876,99}} },
+            skip   = { imgs={D.."/skip_btn.png"} },
+            login  = { imgs={D.."/login_btn.png"} },
+        }
+        local function match(imgs, th)
+            for _,img in ipairs(imgs) do
+                if fileExists(img) then
+                    keepScreen(true)
+                    local x,y = findImage(img, 1, th or 0.6, nil, nil)
+                    keepScreen(false)
+                    if x and x>0 then return x,y end
+                end
+            end
+            return nil
+        end
+        local function tap(x,y) touchDown(0,x,y) usleep(50000) touchUp(0,x,y) end
+        local function closePopups()
+            for _,name in ipairs({"cancel","close","skip"}) do
+                local b = BUTTONS[name]
+                local p = match(b.imgs, 0.5)
+                if p then tap(p[1],p[2]); return true,name end
+            end
+            for _,pt in ipairs(BUTTONS.close.fb) do tap(pt[1],pt[2]) usleep(200000) end
+            return false
+        end
+        local loginDone = false
+        for i=1,20 do
+            local ok, name = closePopups()
+            if not ok then
+                local f = io.open("/tmp/ds_request.txt","w")
+                if f then f:write("popup"); f:close() end
+                keepScreen(true) snapshot("/tmp/_ds_screen.png") keepScreen(false)
+            end
+            if i>=6 and not loginDone then
+                local p = match(BUTTONS.login.imgs, 0.5)
+                if p then tap(p[1],p[2]); loginDone = true end
+            end
+            usleep(5000000)
+        end
+        """
+
+        try? "keepScreen(true) snapshot(\"/tmp/hok_screen.png\") keepScreen(false)\n"
             .write(toFile: "/tmp/screenshot.lua", atomically: true, encoding: .utf8)
 
-        // 弹窗关闭脚本
-        let imgDir = "/var/mobile/Library/AutoTouch/Scripts/Images"
-        try? """
-        keepScreen(true)
-        local imgs = {"\(imgDir)/close_btn.png","\(imgDir)/skip_btn.png","\(imgDir)/back_btn.png"}
-        for _,img in ipairs(imgs) do
-          if fileExists(img) then
-            local x,y=findImage(img,1,0.6,nil,nil)
-            if x>0 then touchDown(0,x,y) usleep(50000) touchUp(0,x,y) keepScreen(false) return end
-          end
-        end
-        keepScreen(false)
-        """.write(toFile: "/tmp/hok_popup.lua", atomically: true, encoding: .utf8)
+        try? mainLua.write(toFile: "/tmp/hok_main.lua", atomically: true, encoding: .utf8)
     }
 
-    // MARK: - DeepSeek AI 语义分析
-
-    private func deepSeekAnalyze() {
-        guard !DeepSeekClient.apiKey.isEmpty else { return }
-
-        let ctx: [String: Any] = [
-            "status": status,
-            "buttons": "取消(1340,732) 关闭(1896,124) 关闭(1898,146) 关闭(1876,99) 登录(1209,945)",
-            "lastAction": logs.components(separatedBy: "\n").last ?? ""
-        ]
-
-        DeepSeekClient.analyzeScreen(context: ctx) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let dict):
-                    if let action = dict["action"] as? String {
-                        self.log("AI建议: \(action) \(dict["reason"] as? String ?? "")")
-                        if action == "click",
-                           let x = dict["x"] as? Double,
-                           let y = dict["y"] as? Double {
-                            DispatchQueue.global().async {
-                                self.at("touchDown 0 \(Int(x)) \(Int(y))")
-                                usleep(50000)
-                                self.at("touchUp 0 \(Int(x)) \(Int(y))")
-                            }
-                        }
-                    }
-                case .failure(let e):
-                    self.log("AI错误: \(e.localizedDescription)")
-                }
-            }
-        }
-    }
-
-    // MARK: - Helpers
-
-    private func playLua(_ name: String) {
-        let path = "/tmp/\(name).lua"
-        at("play start \(path)")
-    }
-
-    private func at(_ args: String) {
-        // 通过 su mobile -c 调用 autotouch（Substrate 只在 mobile 用户下注入）
-        let cmd = "su mobile -c '/usr/bin/autotouch \(args)'"
-        let shell = "/bin/sh"
-        let cArgs: [UnsafeMutablePointer<CChar>?] = [
-            strdup(shell), strdup("-c"), strdup(cmd), nil
-        ]
+    private func runLua(_ name: String) {
+        let cmd = "su mobile -c '/usr/bin/autotouch play start /tmp/\(name).lua'"
+        let cArgs: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sh"), strdup("-c"), strdup(cmd), nil]
         defer { cArgs.forEach { if let p = $0 { free(p) } } }
         var pid: pid_t = 0
-        if posix_spawn(&pid, shell, nil, nil, cArgs, nil) == 0 {
-            var s: Int32 = 0; waitpid(pid, &s, 0)
-        }
+        posix_spawn(&pid, "/bin/sh", nil, nil, cArgs, nil)
+        var s: Int32 = 0; waitpid(pid, &s, 0)
     }
 
     private func log(_ msg: String) { logs += msg + "\n" }

@@ -55,6 +55,42 @@ struct DeepSeekClient {
         }
     }
 
+    // MARK: - Image Chat (DeepSeek vision)
+
+    static func chatWithImage(prompt: String, base64Image: String,
+                               completion: @escaping (Result<String, Error>) -> Void) {
+        let body: [String: Any] = [
+            "model": "deepseek-chat",
+            "messages": [
+                ["role": "system", "content": "王者荣耀自动化。返回JSON坐标: {\"action\":\"click\",\"x\":数字,\"y\":数字}"],
+                ["role": "user", "content": [
+                    ["type": "text", "text": prompt],
+                    ["type": "image_url", "image_url": ["url": "data:image/jpeg;base64," + base64Image]]
+                ]]
+            ],
+            "temperature": 0.1,
+            "max_tokens": 300
+        ]
+
+        var req = URLRequest(url: URL(string: "\(baseURL)/v1/chat/completions")!)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        req.timeoutInterval = 20
+
+        URLSession.shared.dataTask(with: req) { data, _, error in
+            if let error = error { completion(.failure(error)); return }
+            guard let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let choices = json["choices"] as? [[String: Any]],
+                  let msg = choices.first?["message"] as? [String: Any],
+                  let content = msg["content"] as? String
+            else { completion(.failure(NSError(domain: "API", code: -1))); return }
+            completion(.success(content.trimmingCharacters(in: .whitespacesAndNewlines)))
+        }.resume()
+    }
+
     // MARK: - Text Chat
 
     static func chat(_ prompt: String,
