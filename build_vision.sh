@@ -5,7 +5,7 @@ set -e
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 ARCH="arm64"
 MIN_IOS="13.0"
-CXXFLAGS="-arch $ARCH -mios-version-min=$MIN_IOS -isysroot $SDK -std=c++17 -O2"
+CXXFLAGS="-arch $ARCH -mios-version-min=$MIN_IOS -isysroot $SDK -std=c++17 -O2 -Wno-deprecated-declarations"
 
 echo "=== Building VisionEngine ==="
 
