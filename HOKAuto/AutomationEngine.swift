@@ -127,11 +127,15 @@ class AutomationEngine {
     }
 
     private func at(_ args: String) {
-        let parts = args.components(separatedBy: " ")
-        let cArgs = parts.map { strdup($0) }
-        defer { cArgs.forEach { free($0) } }
+        // 通过 su mobile -c 调用 autotouch（Substrate 只在 mobile 用户下注入）
+        let cmd = "su mobile -c '/usr/bin/autotouch \(args)'"
+        let shell = "/bin/sh"
+        let cArgs: [UnsafeMutablePointer<CChar>?] = [
+            strdup(shell), strdup("-c"), strdup(cmd), nil
+        ]
+        defer { cArgs.forEach { if let p = $0 { free(p) } } }
         var pid: pid_t = 0
-        if posix_spawn(&pid, "/usr/bin/autotouch", nil, nil, cArgs + [nil], nil) == 0 {
+        if posix_spawn(&pid, shell, nil, nil, cArgs, nil) == 0 {
             var s: Int32 = 0; waitpid(pid, &s, 0)
         }
     }
