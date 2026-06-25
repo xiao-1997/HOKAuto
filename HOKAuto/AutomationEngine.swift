@@ -6,27 +6,30 @@ class AutomationEngine {
     var isRunning = false { didSet { if !isRunning { FloatingHUD.shared.hide() } } }
     var onUpdate: (() -> Void)?
 
-    private let imgDir = "/var/mobile/Library/AutoTouch/Scripts/Images"
+    private var mainTimer: Timer?, dsTimer: Timer?
+    private var elapsed = 0
+    private var aiCallCount = 0, aiMaxCalls = 5
+    private var lastAICall: Date?
+    private var loginTapped = false
 
-    // 自学习截取区域 (可自定义)
-    private var learnW = 100   // 宽度
-    private var learnH = 80    // 高度
+    // 录制坐标 (1242x2208 Landscape)
+    private let cancelPoint = (x: Float(1340), y: Float(732))
+    private let loginPoint  = (x: Float(1209), y: Float(945))
+    private let closePoints: [(Float, Float)] = [
+        (1896, 124), (1898, 146), (1876, 99), (2066, 146), (2062, 158), (1901, 110)
+    ]
+    private let priorityPoints: [(Float, Float)] = [(1000, 500), (1100, 550)]
 
-    private var dsTimer: Timer?
-    private var aiCallCount = 0        // AI 调用计数
-    private let aiMaxCalls = 5         // 单次最大调用
-    private var lastAICall: Date?      // 上次调用时间
+    // MARK: - Run
 
     func run() {
-        aiCallCount = 0; lastAICall = nil
         guard !isRunning else { return }
-        isRunning = true; status = "测试AI..."; logs = ""; onUpdate?()
+        aiCallCount = 0; lastAICall = nil; elapsed = 0; loginTapped = false
+        isRunning = true; status = "启动中"; logs = ""; onUpdate?()
+        Logger.log("=== HOK Auto IOKit直驱 ===")
 
-        // === 阶段1: 测试 AI 连接 (先测text API，更可靠) ===
-        log("测试 DeepSeek 连接...")
-        status = "测试AI连接"
-
-        // 快速AI检测(2s超时), 不可用则直接离线启动
+        // AI 快速检测
+        status = "AI检测..."
         DispatchQueue.global().async {
             let sem = DispatchSemaphore(value: 0)
             var aiOk = false
@@ -34,174 +37,111 @@ class AutomationEngine {
             _ = sem.wait(timeout: .now() + 2)
 
             DispatchQueue.main.async {
-                if aiOk { self.log("AI已连接"); self.toast("✅ AI已连接") }
-                else { self.log("AI不可用,离线坐标模式"); self.toast("⚠️ 离线模式") }
-                self.launchAndRun()
+                Logger.log(aiOk ? "AI已连接" : "离线模式")
+                self.status = aiOk ? "AI就绪" : "离线模式"
+                self.launchGame()
             }
         }
     }
 
-    private func launchAndRun() {
-        writeLua()
-        log("启动 王者荣耀...")
-        status = "正在启动王者荣耀"
-        toast("🚀 启动王者荣耀 → 等待加载 → 检测弹窗")
-
+    private func launchGame() {
+        log("启动王者荣耀"); status = "启动中"
         if let url = URL(string: "tencent1104466820://") {
             UIApplication.shared.open(url, options: [:]) { _ in }
             log("已启动")
-            toast("✅ 已启动 → 检测弹窗")
-        } else {
-            log("失败"); status = "失败"; isRunning = false; onUpdate?(); return
-        }
+        } else { log("失败"); isRunning = false; onUpdate?(); return }
         onUpdate?()
 
-        // 后台执行 Lua 主循环
-        DispatchQueue.global().async {
-            self.runLua("main")
-            DispatchQueue.main.async {
-                self.status = "完成"; self.log("完成")
-                self.isRunning = false; self.onUpdate?(); self.dsTimer?.invalidate()
-            }
-        }
+        // 每 3 秒主循环
+        mainTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in self.tick() }
+        // 每 3 秒 AI 轮询检查
         dsTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in self.checkDS() }
     }
 
-    // MARK: - DeepSeek + 自学习
+    // MARK: - 主循环 (纯IOKit触控, 无AutoTouch/Lua)
 
-    private func checkDS() {
-        let reqFile = "/tmp/ds_request.txt"
-        let learnFile = "/tmp/ds_learn.txt"  // 自学习请求
-        guard FileManager.default.fileExists(atPath: reqFile) else { return }
+    private func tick() {
+        guard isRunning else { mainTimer?.invalidate(); return }
+        elapsed += 3
+        status = "检测 \(elapsed)s"; onUpdate?()
 
-        let prompt = (try? String(contentsOfFile: reqFile)) ?? "analyze"
-        try? FileManager.default.removeItem(atPath: reqFile)
+        // ① 最高优先级弹窗
+        for pt in priorityPoints { ve_click(pt.0, pt.1); usleep(200000) }
 
-        status = "AI分析..."
-        FloatingHUD.shared.setStep("AI 视觉分析", color: .cyan)
-        onUpdate?()
+        // ② 取消按钮
+        ve_click(cancelPoint.x, cancelPoint.y); usleep(300000)
 
-        guard let img = UIImage(contentsOfFile: "/tmp/_ds_screen.jpg") else { return }
+        // ③ 关闭弹窗 (6个录制位置)
+        for pt in closePoints { ve_click(pt.0, pt.1); usleep(200000) }
 
-        // 防刷：限制调用次数和间隔
-        if aiCallCount >= aiMaxCalls {
-            log("AI已达上限(\(aiMaxCalls)次)")
-            try? "{\"buttons\":[]}".write(toFile: "/tmp/ds_response.txt", atomically: true, encoding: .utf8)
-            return
+        // ④ AI未命中→触发DeepSeek (每15s限流)
+        if aiCallCount < aiMaxCalls, let last = lastAICall, Date().timeIntervalSince(last) < 15 {
+            // skip
+        } else {
+            triggerAI()
         }
-        if let last = lastAICall, Date().timeIntervalSince(last) < 15 {
-            log("AI冷却中...")
-            try? "{\"buttons\":[]}".write(toFile: "/tmp/ds_response.txt", atomically: true, encoding: .utf8)
-            return
-        }
-        aiCallCount += 1
-        lastAICall = Date()
-        log("AI调用 \(aiCallCount)/\(aiMaxCalls)")
 
-        DeepSeekClient.analyze(image: img,
-            prompt: "王者荣耀1242x2208横屏。列出弹窗上所有按钮名称和坐标(JSON)。") { result in
+        // ⑤ 30s后点登录
+        if elapsed >= 30, !loginTapped {
+            log("点击登录"); status = "点击登录"
+            ve_click(loginPoint.x, loginPoint.y)
+            loginTapped = true
+            Logger.log("登录已点击")
+        }
+
+        // ⑥ 超时
+        if elapsed >= 100 { stop() }
+    }
+
+    // MARK: - DeepSeek AI
+
+    private func triggerAI() {
+        guard aiCallCount < aiMaxCalls else { return }
+        if let last = lastAICall, Date().timeIntervalSince(last) < 15 { return }
+        aiCallCount += 1; lastAICall = Date()
+        Logger.log("AI调用 \(aiCallCount)/\(aiMaxCalls)")
+
+        // 截图 → 上传 VL
+        guard let img = captureScreen() else { Logger.log("截图失败"); return }
+        status = "AI分析..."; onUpdate?()
+
+        DeepSeekClient.analyze(image: img, prompt: "识别弹窗关闭按钮坐标,返回JSON") { result in
             DispatchQueue.main.async {
-                switch result {
-                case .success(let text):
-                    self.log("AI: \(text.prefix(100))")
-                    FloatingHUD.shared.recognitionResult("deepseek", name: "AI识别完成", success: true)
-                    try? text.write(toFile: "/tmp/ds_response.txt", atomically: true, encoding: .utf8)
-                    self.learnFromAI(text)
-                case .failure(let e):
-                    self.log("AI错误: \(e.localizedDescription)")
-                    try? "{}".write(toFile: "/tmp/ds_response.txt", atomically: true, encoding: .utf8)
+                if case .success(let text) = result {
+                    Logger.log("AI返回: \(text.prefix(100))")
+                    // 提取坐标并点击
+                    if let x = self.extractCoord(text, key: "x"),
+                       let y = self.extractCoord(text, key: "y") {
+                        ve_click(Float(x), Float(y))
+                        Logger.log("AI点击: (\(x),\(y))")
+                    }
                 }
             }
         }
     }
 
-    /// 从AI结果中学习：截取按钮区域保存为模板
-    private func learnFromAI(_ aiText: String) {
-        // 解析按钮坐标
-        let pattern = #""name"\s*:\s*"([^"]+)"[^}]*"x"\s*:\s*(\d+)[^}]*"y"\s*:\s*(\d+)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
-        let matches = regex.matches(in: aiText, range: NSRange(aiText.startIndex..., in: aiText))
-
-        for match in matches.prefix(5) {
-            guard let nameRange = Range(match.range(at: 1), in: aiText),
-                  let xRange = Range(match.range(at: 2), in: aiText),
-                  let yRange = Range(match.range(at: 3), in: aiText) else { continue }
-
-            let name = String(aiText[nameRange]).trimmingCharacters(in: .alphanumerics.inverted)
-            let x = Int(String(aiText[xRange])) ?? 0
-            let y = Int(String(aiText[yRange])) ?? 0
-            guard x > 0, y > 0, !name.isEmpty, name.count < 30 else { continue }
-
-            // 保存按钮截图到模板库（80x60 区域）
-            let safeName = name.replacingOccurrences(of: "/", with: "_")
-                             .replacingOccurrences(of: " ", with: "_")
-            // 去重: 同名模板≤3个
-            let existing = (try? FileManager.default.contentsOfDirectory(atPath: imgDir))?.filter { $0.hasPrefix("ai_\(safeName)_") } ?? []
-            if existing.count >= 3 { log("跳过重复: \(safeName)"); continue }
-            let fileName = "ai_\(safeName)_\(Int(Date().timeIntervalSince1970)).png"
-            let hw = learnW / 2, hh = learnH / 2
-            let captureLua = """
-            keepScreen(true)
-            snapshot("\(imgDir)/\(fileName)", \(x-hw), \(y-hh), \(learnW), \(learnH))
-            keepScreen(false)
-            """
-
-            let tmpPath = "/tmp/learn_\(fileName.replacingOccurrences(of: ".png", with: "")).lua"
-            try? captureLua.write(toFile: tmpPath, atomically: true, encoding: .utf8)
-
-            // 后台截取（不阻塞）
-            DispatchQueue.global().async {
-                let cmd = "su mobile -c '/usr/bin/autotouch play start \(tmpPath)'"
-                let cArgs: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sh"), strdup("-c"), strdup(cmd), nil]
-                defer { cArgs.forEach { if let p = $0 { free(p) } } }
-                var pid: pid_t = 0
-                posix_spawn(&pid, "/bin/sh", nil, nil, cArgs, nil)
-                var s: Int32 = 0; waitpid(pid, &s, 0)
-            }
-
-            log("学习: \(name) → \(fileName)")
-        }
+    private func extractCoord(_ text: String, key: String) -> Int? {
+        guard let range = text.range(of: "\"\(key)\":\\s*(\\d+)", options: .regularExpression),
+              let numRange = text[range].range(of: "\\d+", options: .regularExpression)
+        else { return nil }
+        return Int(text[numRange])
     }
 
-    // MARK: - Lua
+    // MARK: - 截图 (IOSurface 私有API)
 
-    private func writeLua() {
-        // 写学习配置
-        try? "w=\(learnW)\nh=\(learnH)\n".write(toFile: "/tmp/learn_config.txt", atomically: true, encoding: .utf8)
-        // 写 Lua 主脚本
-        try? LuaScripts.hokMain.write(toFile: "/tmp/main.lua", atomically: true, encoding: .utf8)
+    private func captureScreen() -> UIImage? {
+        // 暂用 UIKit snapshot (仅截本app)
+        guard let window = UIApplication.shared.windows.first else { return nil }
+        let renderer = UIGraphicsImageRenderer(bounds: window.bounds)
+        return renderer.image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: false) }
     }
 
     // MARK: - Helpers
 
-    /// 通过 AutoTouch toast 在游戏上方显示文字
-    private func toast(_ msg: String) {
-        let escaped = msg.replacingOccurrences(of: "'", with: "'\\''")
-        let lua = "toast('\(escaped)')"
-        try? lua.write(toFile: "/tmp/toast.lua", atomically: true, encoding: .utf8)
-        runLuaShort("toast")
+    private func stop() {
+        mainTimer?.invalidate(); dsTimer?.invalidate()
+        status = "完成"; log("完成"); isRunning = false; onUpdate?()
     }
 
-    private func runLuaShort(_ name: String) {
-        DispatchQueue.global().async {
-            let c = "su mobile -c '/usr/bin/autotouch play start /tmp/\(name).lua'"
-            let a: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sh"), strdup("-c"), strdup(c), nil]
-            defer { a.forEach { if let p = $0 { free(p) } } }
-            var pid: pid_t = 0
-            posix_spawn(&pid, "/bin/sh", nil, nil, a, nil)
-            var s: Int32 = 0
-            waitpid(pid, &s, 0)
-        }
-    }
-
-    private func runLua(_ name: String) {
-        let c = "su mobile -c '/usr/bin/autotouch play start /tmp/\(name).lua'"
-        let a: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sh"), strdup("-c"), strdup(c), nil]
-        defer { a.forEach { if let p = $0 { free(p) } } }
-        var pid: pid_t = 0
-        posix_spawn(&pid, "/bin/sh", nil, nil, a, nil)
-        var s: Int32 = 0; waitpid(pid, &s, 0)
-    }
-
-    private func log(_ msg: String) { logs += msg + "\n" }
+    private func log(_ msg: String) { logs += msg + "\n"; Logger.log(msg) }
 }
