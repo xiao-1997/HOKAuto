@@ -7,6 +7,11 @@ class AutomationEngine {
     var onUpdate: (() -> Void)?
 
     private let imgDir = "/var/mobile/Library/AutoTouch/Scripts/Images"
+
+    // 自学习截取区域 (可自定义)
+    private var learnW = 100   // 宽度
+    private var learnH = 80    // 高度
+
     private var dsTimer: Timer?
 
     func run() {
@@ -86,9 +91,10 @@ class AutomationEngine {
             let safeName = name.replacingOccurrences(of: "/", with: "_")
                              .replacingOccurrences(of: " ", with: "_")
             let fileName = "ai_\(safeName)_\(Int(Date().timeIntervalSince1970)).png"
+            let hw = learnW / 2, hh = learnH / 2
             let captureLua = """
             keepScreen(true)
-            snapshot("\(imgDir)/\(fileName)", \(x-40), \(y-30), 80, 60)
+            snapshot("\(imgDir)/\(fileName)", \(x-hw), \(y-hh), \(learnW), \(learnH))
             keepScreen(false)
             """
 
@@ -112,6 +118,10 @@ class AutomationEngine {
     // MARK: - Lua
 
     private func writeLua() {
+        // 写学习配置（用户可编辑）
+        let cfg = "w=\(learnW)\nh=\(learnH)\n"
+        try? cfg.write(toFile: "/tmp/learn_config.txt", atomically: true, encoding: .utf8)
+
         let D = imgDir
         let lua = """
         local D = "\(D)"
@@ -137,6 +147,19 @@ class AutomationEngine {
             end
             return ai
         end
+        -- 读取学习配置
+        local learn_w, learn_h = 100, 80
+        local cfg = io.open("/tmp/learn_config.txt")
+        if cfg then
+            for line in cfg:lines() do
+                local w = string.match(line, "w=(%d+)")
+                local h = string.match(line, "h=(%d+)")
+                if w then learn_w = tonumber(w) end
+                if h then learn_h = tonumber(h) end
+            end
+            cfg:close()
+        end
+
         local function match(imgs, ms)
             local deadline = os.time() + (ms or 3)
             while os.time() < deadline do
