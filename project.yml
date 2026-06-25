@@ -22,4 +22,5 @@ targets:
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: NO
         CODE_SIGNING_ALLOWED: NO
+        SWIFT_OBJC_BRIDGING_HEADER: HOKAuto/HOKAuto-Bridging-Header.h
         LIBRARY_SEARCH_PATHS: $(inherited) $(PROJECT_DIR)
