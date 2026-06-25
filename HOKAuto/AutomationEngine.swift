@@ -41,8 +41,8 @@ class AutomationEngine {
 
         status = "AI检测..."
         DispatchQueue.global().async {
-            let sem = DispatchSemaphore(value: 0); var ok = false
-            DeepSeekClient.chat("ping") { if case .success = $0 { ok = true }; sem.signal() }
+            let sem = DispatchSemaphore(value: 0)
+            DeepSeekClient.chat("ping") { _ in sem.signal() }
             _ = sem.wait(timeout: .now() + 2)
             DispatchQueue.main.async { self.launch() }
         }
@@ -124,6 +124,8 @@ class AutomationEngine {
 
     private func verifyButtons() {
         guard let screen = ScreenCapture.capture(maxWidth: 600, quality: 0.4) else { verificationFailed(); return }
+        let imgW = Float(screen.size.width * screen.scale)
+        let imgH = Float(screen.size.height * screen.scale)
 
         // 先尝试已知弹窗位置(不重复识别)
         for (label, pt) in knownPopups {
