@@ -86,7 +86,7 @@ struct ContentView: View {
     }
 
     private func refreshMacros() {
-        macros = MacroRecorder.listSaved()
+        macros = MacroRecorder.list()
     }
 }
 
