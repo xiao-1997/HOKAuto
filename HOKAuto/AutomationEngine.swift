@@ -48,6 +48,7 @@ class AutomationEngine {
                     self.onUpdate?()
             }
         }
+        }
     }
 
     private func launchAndRun() {
