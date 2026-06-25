@@ -24,3 +24,7 @@ targets:
         CODE_SIGNING_ALLOWED: NO
         SWIFT_OBJC_BRIDGING_HEADER: HOKAuto/HOKAuto-Bridging-Header.h
         LIBRARY_SEARCH_PATHS: $(inherited) $(PROJECT_DIR)
+    preBuildScripts:
+      - name: Copy Lua resources
+        script: |
+          cp ${SRCROOT}/HOKAuto/hok_main.lua ${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/ 2>/dev/null || true
