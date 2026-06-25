@@ -49,11 +49,16 @@ class FloatingHUD {
         vc.view.addSubview(container)
 
         window = UIWindow(frame: UIScreen.main.bounds)
-        window?.windowLevel = .alert + 1
+        // 最高层级确保在游戏上方
+        window?.windowLevel = UIWindow.Level(rawValue: CGFloat.greatestFiniteMagnitude)
         window?.rootViewController = vc
         window?.isHidden = false
         window?.isUserInteractionEnabled = false
         window?.backgroundColor = .clear
+        window?.makeKeyAndVisible()
+
+        // 防止被其他窗口覆盖
+        window?.isOpaque = false
     }
 
     func hide() {

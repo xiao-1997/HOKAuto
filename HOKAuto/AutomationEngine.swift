@@ -17,27 +17,18 @@ class AutomationEngine {
     func run() {
         guard !isRunning else { return }
         isRunning = true; status = "就绪"; logs = ""; onUpdate?()
-        FloatingHUD.shared.show()
         writeLua()
 
-        // 操作步骤悬浮窗
-        FloatingHUD.shared.showSteps([
-            .running("打开王者荣耀"),
-            .pending("等待加载"),
-            .pending("检测弹窗"),
-        ])
-
+        // 操作步骤 (通过 Lua toast 显示在游戏上方)
+        toast("⏳ 打开王者荣耀 → 等待加载 → 检测弹窗")
         log("启动 王者荣耀...")
         status = "正在启动王者荣耀"
+
         if let url = URL(string: "tencent1104466820://") {
             UIApplication.shared.open(url, options: [:]) { _ in }
             log("已启动")
-            FloatingHUD.shared.showSteps([
-                .success("打开王者荣耀"),
-                .running("等待加载"),
-                .pending("检测弹窗"),
-            ])
-        } else { log("失败"); status = "失败"; isRunning = false; FloatingHUD.shared.hide(); onUpdate?(); return }
+            toast("✅ 王者荣耀已启动 → ⏳ 等待加载 → 检测弹窗")
+        } else { log("失败"); status = "失败"; isRunning = false; onUpdate?(); return }
         onUpdate?()
 
         DispatchQueue.global().async {
@@ -64,11 +55,10 @@ class AutomationEngine {
         FloatingHUD.shared.setStep("AI 视觉分析", color: .cyan)
         onUpdate?()
 
-        guard let img = UIImage(contentsOfFile: "/tmp/_ds_screen.jpg"),
-              let data = img.jpegData(compressionQuality: 0.4) else { return }
-        let b64 = data.base64EncodedString()
+        guard let img = UIImage(contentsOfFile: "/tmp/_ds_screen.jpg") else { return }
 
-        DeepSeekClient.chatWithImage(prompt: "王者荣耀1242x2208横屏。列出弹窗上所有按钮名称和坐标(JSON)。对未识别的按钮描述其外观特征。{\"buttons\":[{\"name\":\"\",\"x\":0,\"y\":0,\"desc\":\"外观描述\"}]}", base64Image: b64) { result in
+        DeepSeekClient.analyze(image: img,
+            prompt: "王者荣耀1242x2208横屏。列出弹窗上所有按钮名称和坐标(JSON)。") { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success(let text):
@@ -163,6 +153,7 @@ class AutomationEngine {
         end
         -- 读取学习配置
         local learn_w, learn_h = 100, 80
+        toast("⏳ 视觉检测中...")
         local cfg = io.open("/tmp/learn_config.txt")
         if cfg then
             for line in cfg:lines() do
@@ -241,6 +232,26 @@ class AutomationEngine {
     }
 
     // MARK: - Helpers
+
+    /// 通过 AutoTouch toast 在游戏上方显示文字
+    private func toast(_ msg: String) {
+        let escaped = msg.replacingOccurrences(of: "'", with: "'\\''")
+        let lua = "toast('\(escaped)')"
+        try? lua.write(toFile: "/tmp/toast.lua", atomically: true, encoding: .utf8)
+        runLuaShort("toast")
+    }
+
+    private func runLuaShort(_ name: String) {
+        DispatchQueue.global().async {
+            let c = "su mobile -c '/usr/bin/autotouch play start /tmp/\(name).lua'"
+            let a: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sh"), strdup("-c"), strdup(c), nil]
+            defer { a.forEach { if let p = $0 { free(p) } } }
+            var pid: pid_t = 0
+            posix_spawn(&pid, "/bin/sh", nil, nil, a, nil)
+            var s: Int32 = 0
+            waitpid(pid, &s, 0)
+        }
+    }
 
     private func runLua(_ name: String) {
         let c = "su mobile -c '/usr/bin/autotouch play start /tmp/\(name).lua'"
