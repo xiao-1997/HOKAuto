@@ -177,12 +177,8 @@ class AutomationEngine {
     private func writeLua() {
         // 写学习配置
         try? "w=\(learnW)\nh=\(learnH)\n".write(toFile: "/tmp/learn_config.txt", atomically: true, encoding: .utf8)
-
-        // 从 Bundle 复制 Lua 脚本到 /tmp/
-        if let src = Bundle.main.url(forResource: "hok_main", withExtension: "lua") {
-            let dst = URL(fileURLWithPath: "/tmp/main.lua")
-            try? FileManager.default.copyItem(at: src, to: dst)
-        }
+        // 写 Lua 主脚本
+        try? LuaScripts.hokMain.write(toFile: "/tmp/main.lua", atomically: true, encoding: .utf8)
     }
 
     // MARK: - Helpers
