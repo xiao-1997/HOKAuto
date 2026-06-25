@@ -16,10 +16,6 @@ workflows:
         script: brew install xcodegen
       - name: Generate Xcode project
         script: xcodegen generate
-      - name: Build VisionEngine
-        script: |
-          bash build_vision.sh
-
       - name: Build iOS app
         script: |
           xcodebuild -project HOKAuto.xcodeproj \
