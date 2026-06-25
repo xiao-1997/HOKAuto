@@ -22,32 +22,26 @@ class AutomationEngine {
         guard !isRunning else { return }
         isRunning = true; status = "测试AI..."; logs = ""; onUpdate?()
 
-        // === 阶段1: 测试 AI 连接 ===
-        log("测试 DeepSeek VL 连接...")
+        // === 阶段1: 测试 AI 连接 (先测text API，更可靠) ===
+        log("测试 DeepSeek 连接...")
         status = "测试AI连接"
-        toast("🔗 测试 AI 连接中...")
 
-        // 用一个 1×1 像素图测试连接
-        let testImg = UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1)).image { ctx in
-            UIColor.black.setFill(); ctx.fill(CGRect(x: 0, y: 0, width: 1, height: 1))
-        }
-        DeepSeekClient.analyze(image: testImg, prompt: "ping") { result in
+        DeepSeekClient.chat("ping") { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success:
                     self.log("AI 连接成功 ✅")
                     self.status = "AI已连接,启动中..."
-                    self.toast("✅ AI 连接成功 → 启动王者荣耀")
+                    self.toast("✅ AI已连接 → 启动")
                     self.launchAndRun()
 
                 case .failure(let e):
-                    self.log("AI 连接失败: \(e.localizedDescription)")
-                    self.status = "AI未连接"
-                    self.toast("❌ AI 未连接，请检查网络后重试")
-                    self.isRunning = false
-                    self.onUpdate?()
+                    self.log("AI不可用: \(e.localizedDescription.prefix(80))")
+                    self.status = "离线模式启动"
+                    self.toast("⚠️ AI离线 → 纯坐标模式")
+                    self.launchAndRun()
+                }
             }
-        }
         }
     }
 
