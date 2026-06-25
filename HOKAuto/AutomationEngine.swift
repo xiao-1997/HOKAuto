@@ -181,8 +181,8 @@ class AutomationEngine {
     private func loadCoords() {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: coordFile)),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-        if let c = json["cancel"] as? [String: Float], c.count == 2 { cancelPt = (c[0], c[1]) }
-        if let l = json["login"] as? [String: Float],  l.count == 2 { loginPt  = (l[0], l[1]) }
+        if let c = json["cancel"] as? [Float], c.count == 2 { cancelPt = (c[0], c[1]) }
+        if let l = json["login"] as? [Float],  l.count == 2 { loginPt  = (l[0], l[1]) }
         if let arr = json["close"] as? [[Float]] { closePts = arr.map { ($0[0], $0[1]) } }
         Logger.log("加载缓存坐标: 取消(\(Int(cancelPt.0)),\(Int(cancelPt.1))) 登录(\(Int(loginPt.0)),\(Int(loginPt.1)))")
     }
