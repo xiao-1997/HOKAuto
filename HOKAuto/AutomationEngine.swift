@@ -146,7 +146,7 @@ class AutomationEngine {
             verificationPassed(); return
         }
 
-        // OCR未命中→VL2
+        // OCR未命中→V4-Pro
         let prompt = "截图(\(Int(imgW))x\(Int(imgH)))。返回JSON:{\"close_button\":{\"x\":0,\"y\":0},\"cancel_button\":{\"x\":0,\"y\":0}}"
         DeepSeekClient.analyze(image: screen, prompt: prompt) { r in
             var found = false
@@ -155,7 +155,7 @@ class AutomationEngine {
                 for (k,label) in [("close_button","关闭"),("cancel_button","取消")] {
                     if let cx = self.extractCoord(t,k,"x"), let cy = self.extractCoord(t,k,"y"), cx>0,cy>0 {
                         self.click(cx*sx, cy*sy); found = true
-                        Logger.log("校验VL2:\(label)")
+                        Logger.log("校验V4-Pro:\(label)")
                     }
                 }
             }
@@ -241,7 +241,7 @@ class AutomationEngine {
         guard aiCallCount < aiMaxCalls else { return }
         if let last = lastAICall, Date().timeIntervalSince(last) < 15 { return }
         aiCallCount += 1; lastAICall = Date()
-        Logger.log("VL2 \(aiCallCount)/\(aiMaxCalls)")
+        Logger.log("V4-Pro \(aiCallCount)/\(aiMaxCalls)")
 
         guard let img = ScreenCapture.capture(maxWidth: 600, quality: 0.4) else { return }
         let imgW = Float(img.size.width * img.scale)
@@ -255,7 +255,7 @@ class AutomationEngine {
 
         DeepSeekClient.analyze(image: img, prompt: prompt) { r in
             if case .success(let t) = r {
-                Logger.log("VL2: \(t.prefix(120))")
+                Logger.log("V4-Pro: \(t.prefix(120))")
 
                 // 坐标映射: 图片 → 屏幕 (1242x2208)
                 let sw: Float = 1242, sh: Float = 2208
@@ -270,7 +270,7 @@ class AutomationEngine {
                         if mx > 0, my > 0 {
                             DispatchQueue.main.async {
                                 self.click(mx, my)
-                                Logger.log("VL2点击:\(label) (\(Int(mx)),\(Int(my)))")
+                                Logger.log("V4-Pro点击:\(label) (\(Int(mx)),\(Int(my)))")
                             }
                         }
                     }

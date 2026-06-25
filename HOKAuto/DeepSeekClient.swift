@@ -1,6 +1,6 @@
 import UIKit
 
-/// DeepSeek V4 Pro 多模态 + 文本 统一客户端
+/// DeepSeek V4 Pro 多模态视觉 + 文本 统一客户端
 struct DeepSeekClient {
     static let baseURL = "https://api.deepseek.com/v1/chat/completions"
     static let apiKey = "sk-123c8d699d4147898446a34a33b38f8d"
@@ -9,17 +9,18 @@ struct DeepSeekClient {
 
     static func analyze(image: UIImage, prompt: String,
                         completion: @escaping (Result<String, Error>) -> Void) {
-        guard let data = image.jpegData(compressionQuality: 0.5) else {
+        // PNG 编码（无损，模型识别更准）
+        guard let data = image.pngData() else {
             completion(.failure(NSError(domain: "Image", code: -1))); return
         }
         let b64 = data.base64EncodedString()
 
         let body: [String: Any] = [
-            "model": "deepseek-vl2",
+            "model": "deepseek-v4-pro",
             "messages": [
                 ["role": "user", "content": [
                     ["type": "text", "text": prompt],
-                    ["type": "image_url", "image_url": ["url": "data:image/jpeg;base64,\(b64)"]]
+                    ["type": "image_url", "image_url": ["url": "data:image/png;base64,\(b64)"]]
                 ]]
             ],
             "max_tokens": 1000
@@ -34,7 +35,10 @@ struct DeepSeekClient {
 
         Logger.log("V4-Pro: POST")
         URLSession.shared.dataTask(with: req) { data, _, error in
-            if let error = error { Logger.log("V4-Pro ERR: \(error.localizedDescription)"); completion(.failure(error)); return }
+            if let error = error {
+                Logger.log("V4-Pro ERR: \(error.localizedDescription)")
+                completion(.failure(error)); return
+            }
             guard let data = data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { completion(.failure(NSError(domain: "API", code: -1))); return }
@@ -47,7 +51,8 @@ struct DeepSeekClient {
             } else if let err = json["error"] as? [String: Any],
                       let m = err["message"] as? String {
                 Logger.log("V4-Pro API Error: \(m)")
-                completion(.failure(NSError(domain: "DeepSeek", code: -1, userInfo: [NSLocalizedDescriptionKey: m])))
+                completion(.failure(NSError(domain: "DeepSeek", code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: m])))
             } else {
                 completion(.failure(NSError(domain: "API", code: -1)))
             }
@@ -76,7 +81,10 @@ struct DeepSeekClient {
 
         Logger.log("chat: POST")
         URLSession.shared.dataTask(with: req) { data, _, error in
-            if let error = error { Logger.log("chat ERR: \(error.localizedDescription)"); completion(.failure(error)); return }
+            if let error = error {
+                Logger.log("chat ERR: \(error.localizedDescription)")
+                completion(.failure(error)); return
+            }
             guard let data = data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let choices = json["choices"] as? [[String: Any]],
