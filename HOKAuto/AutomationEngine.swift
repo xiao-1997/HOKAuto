@@ -16,21 +16,52 @@ class AutomationEngine {
 
     func run() {
         guard !isRunning else { return }
-        isRunning = true; status = "就绪"; logs = ""; onUpdate?()
-        writeLua()
+        isRunning = true; status = "测试AI..."; logs = ""; onUpdate?()
 
-        // 操作步骤 (通过 Lua toast 显示在游戏上方)
-        toast("⏳ 打开王者荣耀 → 等待加载 → 检测弹窗")
+        // === 阶段1: 测试 AI 连接 ===
+        log("测试 DeepSeek VL 连接...")
+        status = "测试AI连接"
+        toast("🔗 测试 AI 连接中...")
+
+        // 用一个 1×1 像素图测试连接
+        let testImg = UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1)).image { ctx in
+            UIColor.black.setFill(); ctx.fill(CGRect(x: 0, y: 0, width: 1, height: 1))
+        }
+        DeepSeekClient.analyze(image: testImg, prompt: "ping") { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success:
+                    self.log("AI 连接成功 ✅")
+                    self.status = "AI已连接,启动中..."
+                    toast("✅ AI 连接成功 → 启动王者荣耀")
+                    self.launchAndRun()
+
+                case .failure(let e):
+                    self.log("AI 连接失败: \(e.localizedDescription)")
+                    self.status = "AI未连接"
+                    toast("❌ AI 未连接，请检查网络后重试")
+                    self.isRunning = false
+                    self.onUpdate?()
+            }
+        }
+    }
+
+    private func launchAndRun() {
+        writeLua()
         log("启动 王者荣耀...")
         status = "正在启动王者荣耀"
+        toast("🚀 启动王者荣耀 → 等待加载 → 检测弹窗")
 
         if let url = URL(string: "tencent1104466820://") {
             UIApplication.shared.open(url, options: [:]) { _ in }
             log("已启动")
-            toast("✅ 王者荣耀已启动 → ⏳ 等待加载 → 检测弹窗")
-        } else { log("失败"); status = "失败"; isRunning = false; onUpdate?(); return }
+            toast("✅ 已启动 → 检测弹窗")
+        } else {
+            log("失败"); status = "失败"; isRunning = false; onUpdate?(); return
+        }
         onUpdate?()
 
+        // 后台执行 Lua 主循环
         DispatchQueue.global().async {
             self.runLua("main")
             DispatchQueue.main.async {
