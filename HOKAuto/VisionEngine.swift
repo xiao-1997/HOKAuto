@@ -1,5 +1,6 @@
 import UIKit
 import Vision
+import Foundation
 
 /// 本地视觉引擎: vImage模板匹配 + Vision OCR
 struct LocalVision {
