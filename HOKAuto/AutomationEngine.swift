@@ -13,8 +13,12 @@ class AutomationEngine {
     private var learnH = 80    // 高度
 
     private var dsTimer: Timer?
+    private var aiCallCount = 0        // AI 调用计数
+    private let aiMaxCalls = 5         // 单次最大调用
+    private var lastAICall: Date?      // 上次调用时间
 
     func run() {
+        aiCallCount = 0; lastAICall = nil
         guard !isRunning else { return }
         isRunning = true; status = "测试AI..."; logs = ""; onUpdate?()
 
@@ -88,6 +92,21 @@ class AutomationEngine {
 
         guard let img = UIImage(contentsOfFile: "/tmp/_ds_screen.jpg") else { return }
 
+        // 防刷：限制调用次数和间隔
+        if aiCallCount >= aiMaxCalls {
+            log("AI已达上限(\(aiMaxCalls)次)")
+            try? "{\"buttons\":[]}".write(toFile: "/tmp/ds_response.txt", atomically: true, encoding: .utf8)
+            return
+        }
+        if let last = lastAICall, Date().timeIntervalSince(last) < 15 {
+            log("AI冷却中...")
+            try? "{\"buttons\":[]}".write(toFile: "/tmp/ds_response.txt", atomically: true, encoding: .utf8)
+            return
+        }
+        aiCallCount += 1
+        lastAICall = Date()
+        log("AI调用 \(aiCallCount)/\(aiMaxCalls)")
+
         DeepSeekClient.analyze(image: img,
             prompt: "王者荣耀1242x2208横屏。列出弹窗上所有按钮名称和坐标(JSON)。") { result in
             DispatchQueue.main.async {
@@ -125,6 +144,9 @@ class AutomationEngine {
             // 保存按钮截图到模板库（80x60 区域）
             let safeName = name.replacingOccurrences(of: "/", with: "_")
                              .replacingOccurrences(of: " ", with: "_")
+            // 去重: 同名模板≤3个
+            let existing = (try? FileManager.default.contentsOfDirectory(atPath: imgDir))?.filter { $0.hasPrefix("ai_\(safeName)_") } ?? []
+            if existing.count >= 3 { log("跳过重复: \(safeName)"); continue }
             let fileName = "ai_\(safeName)_\(Int(Date().timeIntervalSince1970)).png"
             let hw = learnW / 2, hh = learnH / 2
             let captureLua = """
@@ -160,9 +182,15 @@ class AutomationEngine {
         let D = imgDir
         let lua = """
         local D = "\(D)"
+        -- 优先级1: 最高优先级弹窗（第三方授权/清理数据）
+        local PRIORITY_ALERT = {
+            auth_clean = {imgs={D.."/alert_clean.png",D.."/alert_auth.png"}, fb={{1000,500},{1100,550}}},
+        }
+        -- 优先级2: 常规弹窗
         local BUTTONS = {
             cancel = {imgs={D.."/cancel_btn.png"}},
             close  = {imgs={D.."/close_btn.png",D.."/close_btn2.png",D.."/x_btn.png"}, fb={{1896,124},{1876,99}}},
+            announce = {imgs={D.."/announce_x.png",D.."/x_announce.png"}, fb={{2100,100},{1800,100}}},  -- 公告X
             skip   = {imgs={D.."/skip_btn.png"}},
             login  = {imgs={D.."/login_btn.png"}},
         }
@@ -211,15 +239,39 @@ class AutomationEngine {
             end
             return nil
         end
+        -- 模板去重: 检查相似(同名+相近尺寸即跳过)
+        local function isDuplicate(name)
+            local base = name:match("([^_]+)")
+            if not base then return false end
+            local f = io.popen("ls "..D.."/ai_"..base.."_*.png 2>/dev/null")
+            if f then
+                local cnt = 0
+                for _ in f:lines() do cnt = cnt + 1 end
+                f:close()
+                return cnt >= 3  -- 同名模板超过3个不再存储
+            end
+            return false
+        end
+
         local function matchAll(ms)
+            -- 1) 最高优先级: 第三方授权/清理弹窗
+            for _,b in pairs(PRIORITY_ALERT) do
+                local p = match(b.imgs, 1)
+                if p then return p, "priority" end
+            end
+            -- 盲点兜底
+            for _,b in pairs(PRIORITY_ALERT) do
+                for _,pt in ipairs(b.fb) do tap(pt[1],pt[2]) usleep(200000) end
+            end
+
+            -- 2) 常规弹窗
             local ai = loadAITemplates()
-            local order = {"cancel","close","skip"}
+            local order = {"cancel","close","announce","skip"}
             for _,name in ipairs(order) do
                 local b = BUTTONS[name]
-                local p = match(b.imgs, ms)
+                local p = match(b.imgs, 1)
                 if p then return p, name end
             end
-            -- 匹配 AI 学到的模板
             for name, imgs in pairs(ai) do
                 local p = match(imgs, 1)
                 if p then return p, "ai_"..name end
@@ -228,10 +280,13 @@ class AutomationEngine {
         end
         local function tap(x,y) touchDown(0,x,y) usleep(50000) touchUp(0,x,y) end
         local loginDone = false
+        local ai_count = 0
         for i=1,20 do
             local p, name = matchAll(3)
             if p then tap(p[1],p[2])
             else
+                ai_count = ai_count + 1
+                if ai_count > 5 then goto continue end  -- 限制AI调用
                 keepScreen(true) snapshot("/tmp/_ds_screen.jpg") keepScreen(false)
                 local f = io.open("/tmp/ds_request.txt","w")
                 if f then f:write("popup"); f:close() end
