@@ -17,10 +17,13 @@ class AutomationEngine {
     private var consecutiveOk = 0         // 连续成功次数
     private var tickCount = 0             // 总轮次计数
 
-    private let cancelPoint = (Float(1340), Float(732))
-    private let loginPoint  = (Float(1209), Float(945))
-    private let closePoints: [(Float, Float)] = [(1896,124),(1898,146),(1876,99),(2066,146),(2062,158),(1901,110)]
-    private let priorityPoints: [(Float, Float)] = [(1000,500),(1100,550)]
+    // 坐标缓存 (优先使用记录的)
+    private let coordFile = "/tmp/hok_coords.json"
+    private var cancelPt: (Float, Float) = (1340, 732)
+    private var loginPt:  (Float, Float) = (1209, 945)
+    private var closePts: [(Float, Float)] = [(1896,124),(1898,146),(1876,99),(2066,146),(2062,158),(1901,110)]
+    private var priorityPts: [(Float, Float)] = [(1000,500),(1100,550)]
+    private var knownPopups: [String: (Float, Float)] = [:]  // 已知弹窗位置(OCR文本→坐标)
     private let imgDir = "/var/mobile/Documents/HOKAuto/Images"
 
     // MARK: - Run
@@ -28,6 +31,8 @@ class AutomationEngine {
     func run() {
         guard !isRunning else { return }
         aiCallCount = 0; lastAICall = nil; elapsed = 0; loginTapped = false
+        tickCount = 0; verifyInterval = 5; consecutiveOk = 0
+        loadCoords() // 加载缓存的坐标
         isRunning = true; status = "启动中"; logs = ""; onUpdate?()
         Logger.log("=== HOK Auto ===")
 
@@ -57,12 +62,12 @@ class AutomationEngine {
         elapsed += 3; tickCount += 1
         status = "检测 \(elapsed)s [校验:\(tickCount)/\(verifyInterval)]"; onUpdate?()
 
-        // ① 优先弹窗
-        for pt in priorityPoints { click(pt.0, pt.1); usleep(150000) }
+        // ① 优先弹窗 (缓存坐标)
+        for pt in priorityPts { click(pt.0, pt.1); usleep(150000) }
         // ② 取消
-        click(cancelPoint.0, cancelPoint.1); usleep(250000)
+        click(cancelPt.0, cancelPt.1); usleep(250000)
         // ③ 关闭
-        for pt in closePoints { click(pt.0, pt.1); usleep(150000) }
+        for pt in closePts { click(pt.0, pt.1); usleep(150000) }
 
         // ④ 自适应视觉校验
         let needVerify = (tickCount % verifyInterval == 0)
@@ -79,9 +84,15 @@ class AutomationEngine {
             triggerAI()
         }
 
-        // ⑥ 登录
+        // ⑥ 登录(缓存坐标)
         if elapsed >= 30, !loginTapped {
-            click(loginPoint.0, loginPoint.1); loginTapped = true
+            click(loginPt.0, loginPt.1); loginTapped = true
+            Logger.log("登录: (\(Int(loginPt.0)),\(Int(loginPt.1)))")
+        }
+
+        // ⑦ 30s未登录→AI重录坐标
+        if elapsed >= 30, !loginTapped, aiCallCount < aiMaxCalls {
+            forceAIRecord()
         }
 
         if elapsed >= 100 { stop() }
@@ -113,12 +124,23 @@ class AutomationEngine {
 
     private func verifyButtons() {
         guard let screen = ScreenCapture.capture(maxWidth: 600, quality: 0.4) else { verificationFailed(); return }
-        let imgW = Float(screen.size.width * screen.scale)
-        let imgH = Float(screen.size.height * screen.scale)
+
+        // 先尝试已知弹窗位置(不重复识别)
+        for (label, pt) in knownPopups {
+            click(pt.0, pt.1); usleep(300000)
+            Logger.log("已知弹窗:\(label)")
+        }
 
         let ocrHits = LocalVision.detectKeywords(screen)
         if ocrHits.contains(where: { $0.text.contains("关闭")||$0.text.contains("取消")||$0.text.contains("登录") }) {
-            for h in ocrHits { click(h.x, h.y); usleep(200000) }
+            for h in ocrHits {
+                click(h.x, h.y); usleep(200000)
+                // 记录新弹窗位置
+                if !knownPopups.keys.contains(h.text) {
+                    knownPopups[h.text] = (h.x, h.y)
+                    Logger.log("新弹窗记录:\(h.text) (\(Int(h.x)),\(Int(h.y)))")
+                }
+            }
             verificationPassed(); return
         }
 
@@ -152,6 +174,63 @@ class AutomationEngine {
     private func verificationFailed() {
         Logger.log("校验失败 重置→每5次")
         verifyInterval = 5; consecutiveOk = 0
+    }
+
+    // MARK: - 坐标缓存
+
+    private func loadCoords() {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: coordFile)),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        if let c = json["cancel"] as? [String: Float], c.count == 2 { cancelPt = (c[0], c[1]) }
+        if let l = json["login"] as? [String: Float],  l.count == 2 { loginPt  = (l[0], l[1]) }
+        if let arr = json["close"] as? [[Float]] { closePts = arr.map { ($0[0], $0[1]) } }
+        Logger.log("加载缓存坐标: 取消(\(Int(cancelPt.0)),\(Int(cancelPt.1))) 登录(\(Int(loginPt.0)),\(Int(loginPt.1)))")
+    }
+
+    private func saveCoords() {
+        let json: [String: Any] = [
+            "cancel": [cancelPt.0, cancelPt.1],
+            "login":  [loginPt.0, loginPt.1],
+            "close":  closePts.map { [$0.0, $0.1] }
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: json) {
+            try? data.write(to: URL(fileURLWithPath: coordFile))
+            Logger.log("坐标已保存")
+        }
+    }
+
+    // 30s未完成任务→AI重录
+    private func forceAIRecord() {
+        aiCallCount += 1; lastAICall = Date()
+        Logger.log("30s未完成→AI重录")
+        guard let img = ScreenCapture.capture(maxWidth: 600, quality: 0.4) else { return }
+        let imgW = Float(img.size.width * img.scale)
+        let imgH = Float(img.size.height * img.scale)
+
+        DeepSeekClient.analyze(image: img,
+            prompt: "截图(\(Int(imgW))x\(Int(imgH)))。返回所有按钮坐标JSON:{\"cancel\":[x,y],\"login\":[x,y],\"close\":[[x,y]]}") { r in
+            if case .success(let t) = r {
+                let sx: Float = 1242/imgW, sy: Float = 2208/imgH
+                if let cx = self.extractArr(t, "cancel"), let cy = self.extractArr(t, "cancel", idx: 1) {
+                    self.cancelPt = (cx*sx, cy*sy)
+                }
+                if let lx = self.extractArr(t, "login"), let ly = self.extractArr(t, "login", idx: 1) {
+                    self.loginPt = (lx*sx, ly*sy)
+                }
+                self.saveCoords()
+                Logger.log("AI重录完成")
+            }
+        }
+    }
+
+    // 解析JSON数组坐标: "cancel":[200,380]
+    private func extractArr(_ t: String, _ k: String, idx: Int = 0) -> Float? {
+        let pattern = "\"\(k)\":\\s*\\[[^\\]]*\\]"
+        guard let range = t.range(of: pattern, options: .regularExpression) else { return nil }
+        let arr = String(t[range])
+        let nums = arr.components(separatedBy: CharacterSet(charactersIn: "[], ")).filter { !$0.isEmpty }
+        guard idx < nums.count, let val = Float(nums[idx]) else { return nil }
+        return val
     }
 
     // MARK: - V4 Pro 视觉识别
