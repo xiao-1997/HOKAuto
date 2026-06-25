@@ -37,13 +37,13 @@ class AutomationEngine {
                 case .success:
                     self.log("AI 连接成功 ✅")
                     self.status = "AI已连接,启动中..."
-                    toast("✅ AI 连接成功 → 启动王者荣耀")
+                    self.toast("✅ AI 连接成功 → 启动王者荣耀")
                     self.launchAndRun()
 
                 case .failure(let e):
                     self.log("AI 连接失败: \(e.localizedDescription)")
                     self.status = "AI未连接"
-                    toast("❌ AI 未连接，请检查网络后重试")
+                    self.toast("❌ AI 未连接，请检查网络后重试")
                     self.isRunning = false
                     self.onUpdate?()
             }
