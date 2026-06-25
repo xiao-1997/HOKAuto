@@ -19,6 +19,7 @@ workflows:
       - name: Build VisionEngine
         script: |
           bash build_vision.sh
+          cp libVisionEngine.a ./
 
       - name: Build iOS app
         script: |

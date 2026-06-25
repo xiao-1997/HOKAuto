@@ -9,6 +9,11 @@ targets:
     type: application
     platform: iOS
     sources: [HOKAuto]
+    dependencies:
+      - framework: IOKit.framework
+        embed: false
+      - framework: libVisionEngine.a
+        embed: false
     settings:
       base:
         INFOPLIST_FILE: HOKAuto/Info.plist
@@ -17,3 +22,4 @@ targets:
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: NO
         CODE_SIGNING_ALLOWED: NO
+        LIBRARY_SEARCH_PATHS: $(inherited) $(PROJECT_DIR)
