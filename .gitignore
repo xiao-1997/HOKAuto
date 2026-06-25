@@ -1,0 +1,33 @@
+# Build
+build/
+*.o
+*.a
+*.dylib
+*.deb
+Payload/
+
+# IDE
+.idea/
+.vscode/
+*.xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# macOS
+.DS_Store
+._*
+
+# Xcode
+*.xcuserstate
+DerivedData/
+
+# Flutter (sibling projects)
+../hok_auto/
+../rearEnd/
+../frontEnd/
+../script/
+../docker-compose.yml
+
+# Temp
+/tmp/
+*.swp
+*.swo
