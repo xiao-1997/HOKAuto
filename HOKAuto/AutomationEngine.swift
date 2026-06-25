@@ -1,9 +1,9 @@
 import UIKit
 
 class AutomationEngine {
-    var status = "就绪"
+    var status = "就绪" { didSet { FloatingHUD.shared.setStatus(status) } }
     var logs = ""
-    var isRunning = false
+    var isRunning = false { didSet { if !isRunning { FloatingHUD.shared.hide() } } }
     var onUpdate: (() -> Void)?
 
     private let imgDir = "/var/mobile/Library/AutoTouch/Scripts/Images"
@@ -16,13 +16,28 @@ class AutomationEngine {
 
     func run() {
         guard !isRunning else { return }
-        isRunning = true; status = "启动中..."; logs = ""; onUpdate?()
+        isRunning = true; status = "就绪"; logs = ""; onUpdate?()
+        FloatingHUD.shared.show()
         writeLua()
 
+        // 操作步骤悬浮窗
+        FloatingHUD.shared.showSteps([
+            .running("打开王者荣耀"),
+            .pending("等待加载"),
+            .pending("检测弹窗"),
+        ])
+
         log("启动 王者荣耀...")
+        status = "正在启动王者荣耀"
         if let url = URL(string: "tencent1104466820://") {
-            UIApplication.shared.open(url, options: [:]) { _ in }; log("已启动")
-        } else { log("失败"); status = "失败"; isRunning = false; onUpdate?(); return }
+            UIApplication.shared.open(url, options: [:]) { _ in }
+            log("已启动")
+            FloatingHUD.shared.showSteps([
+                .success("打开王者荣耀"),
+                .running("等待加载"),
+                .pending("检测弹窗"),
+            ])
+        } else { log("失败"); status = "失败"; isRunning = false; FloatingHUD.shared.hide(); onUpdate?(); return }
         onUpdate?()
 
         DispatchQueue.global().async {
@@ -45,7 +60,8 @@ class AutomationEngine {
         let prompt = (try? String(contentsOfFile: reqFile)) ?? "analyze"
         try? FileManager.default.removeItem(atPath: reqFile)
 
-        status = "DeepSeek..."
+        status = "AI分析..."
+        FloatingHUD.shared.setStep("AI 视觉分析", color: .cyan)
         onUpdate?()
 
         guard let img = UIImage(contentsOfFile: "/tmp/_ds_screen.jpg"),
@@ -57,10 +73,8 @@ class AutomationEngine {
                 switch result {
                 case .success(let text):
                     self.log("AI: \(text.prefix(100))")
-                    // 写回结果给 Lua 执行点击
+                    FloatingHUD.shared.recognitionResult("deepseek", name: "AI识别完成", success: true)
                     try? text.write(toFile: "/tmp/ds_response.txt", atomically: true, encoding: .utf8)
-
-                    // 自学习：提取按钮坐标，保存对应图片
                     self.learnFromAI(text)
                 case .failure(let e):
                     self.log("AI错误: \(e.localizedDescription)")
