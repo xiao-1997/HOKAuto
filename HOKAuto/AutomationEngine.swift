@@ -22,7 +22,7 @@ class AutomationEngine {
 
     // 模板名称
     private let templates = ["cancel_btn","close_btn","close_btn2","x_btn","skip_btn","announce_x","alert_clean","login_btn"]
-    private let imgDir = "/var/mobile/Library/AutoTouch/Scripts/Images"
+    private let imgDir = "/var/mobile/Documents/HOKAuto/Images"
 
     // MARK: - Run
 
@@ -46,6 +46,17 @@ class AutomationEngine {
     }
 
     private func launch() {
+        // 确保图片目录存在
+        try? FileManager.default.createDirectory(atPath: imgDir, withIntermediateDirectories: true)
+        // 从旧位置迁移图片
+        let oldDir = "/var/mobile/Library/AutoTouch/Scripts/Images"
+        for f in (try? FileManager.default.contentsOfDirectory(atPath: oldDir)) ?? [] {
+            let src = "\(oldDir)/\(f)"; let dst = "\(imgDir)/\(f)"
+            if !FileManager.default.fileExists(atPath: dst) {
+                try? FileManager.default.copyItem(atPath: src, toPath: dst)
+            }
+        }
+
         log("启动王者荣耀"); status = "启动中"
         if let url = URL(string: "tencent1104466820://") {
             UIApplication.shared.open(url, options: [:]) { _ in }; log("已启动")
@@ -132,23 +143,26 @@ class AutomationEngine {
 
     // MARK: - Helpers
 
-    // MARK: - 录制点击 (记录到MacroRecorder)
+    // MARK: - 触控 (AutoTouch via su mobile)
 
     private func tap(_ x: Float, _ y: Float, source: String, label: String = "") {
-        ve_click(x, y)
+        let cmd = "su mobile -c '/usr/bin/autotouch touchDown 0 \(Int(x)) \(Int(y)); sleep 0.05; /usr/bin/autotouch touchUp 0 \(Int(x)) \(Int(y))'"
+        let a: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sh"), strdup("-c"), strdup(cmd), nil]
+        defer { a.forEach { if let p = $0 { free(p) } } }
+        var pid: pid_t = 0
+        posix_spawn(&pid, "/bin/sh", nil, nil, a, nil)
+        var s: Int32 = 0; waitpid(pid, &s, 0)
         MacroRecorder.record(x: x, y: y, source: source, label: label)
     }
 
     /// 回放已保存的宏
     func replayMacro(name: String) {
-        guard let steps = MacroRecorder.load(name) else {
-            Logger.log("加载宏失败: \(name)"); return
-        }
+        guard let steps = MacroRecorder.load(name) else { return }
         Logger.log("回放: \(name) (\(steps.count)步)")
         DispatchQueue.global().async {
             for (i, s) in steps.enumerated() {
                 DispatchQueue.main.async { self.status = "回放 \(i+1)/\(steps.count)"; self.onUpdate?() }
-                ve_click(s.x, s.y)
+                self.tap(s.x, s.y, source: "replay", label: s.label)
                 usleep(200000)
             }
             DispatchQueue.main.async { self.status = "回放完成" }
