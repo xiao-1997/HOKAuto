@@ -66,6 +66,23 @@ class FloatingHUD {
         window = nil
     }
 
+    // MARK: - 录制保存
+
+    var onSave: ((String) -> Void)?
+    private var saveField: UITextField?
+
+    func showSaveDialog() {
+        let alert = UIAlertController(title: "保存本次操作", message: "输入文件名", preferredStyle: .alert)
+        alert.addTextField { t in t.placeholder = "如: hok_login" }
+        alert.addAction(UIAlertAction(title: "保存", style: .default) { _ in
+            if let name = alert.textFields?.first?.text, !name.isEmpty {
+                self.onSave?(name)
+            }
+        })
+        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        window?.rootViewController?.present(alert, animated: true)
+    }
+
     /// 设置步骤文本
     func setStep(_ text: String, color: UIColor = .white) {
         DispatchQueue.main.async {

@@ -12,134 +12,154 @@ class AutomationEngine {
     private var lastAICall: Date?
     private var loginTapped = false
 
-    // 录制坐标 (1242x2208 Landscape)
-    private let cancelPoint = (x: Float(1340), y: Float(732))
-    private let loginPoint  = (x: Float(1209), y: Float(945))
+    // 固定坐标 (1242x2208 Landscape)
+    private let cancelPoint = (Float(1340), Float(732))
+    private let loginPoint  = (Float(1209), Float(945))
     private let closePoints: [(Float, Float)] = [
-        (1896, 124), (1898, 146), (1876, 99), (2066, 146), (2062, 158), (1901, 110)
+        (1896,124),(1898,146),(1876,99),(2066,146),(2062,158),(1901,110)
     ]
-    private let priorityPoints: [(Float, Float)] = [(1000, 500), (1100, 550)]
+    private let priorityPoints: [(Float, Float)] = [(1000,500),(1100,550)]
+
+    // 模板名称
+    private let templates = ["cancel_btn","close_btn","close_btn2","x_btn","skip_btn","announce_x","alert_clean","login_btn"]
+    private let imgDir = "/var/mobile/Library/AutoTouch/Scripts/Images"
 
     // MARK: - Run
 
     func run() {
         guard !isRunning else { return }
         aiCallCount = 0; lastAICall = nil; elapsed = 0; loginTapped = false
+        MacroRecorder.startSession()
         isRunning = true; status = "启动中"; logs = ""; onUpdate?()
-        Logger.log("=== HOK Auto IOKit直驱 ===")
+        Logger.log("=== HOK Auto 4层视觉 ===")
 
-        // AI 快速检测
         status = "AI检测..."
         DispatchQueue.global().async {
-            let sem = DispatchSemaphore(value: 0)
-            var aiOk = false
-            DeepSeekClient.chat("ping") { if case .success = $0 { aiOk = true }; sem.signal() }
+            let sem = DispatchSemaphore(value: 0); var ok = false
+            DeepSeekClient.chat("ping") { if case .success = $0 { ok = true }; sem.signal() }
             _ = sem.wait(timeout: .now() + 2)
-
             DispatchQueue.main.async {
-                Logger.log(aiOk ? "AI已连接" : "离线模式")
-                self.status = aiOk ? "AI就绪" : "离线模式"
-                self.launchGame()
+                Logger.log(ok ? "AI在线" : "离线模式")
+                self.launch()
             }
         }
     }
 
-    private func launchGame() {
+    private func launch() {
         log("启动王者荣耀"); status = "启动中"
         if let url = URL(string: "tencent1104466820://") {
-            UIApplication.shared.open(url, options: [:]) { _ in }
-            log("已启动")
+            UIApplication.shared.open(url, options: [:]) { _ in }; log("已启动")
         } else { log("失败"); isRunning = false; onUpdate?(); return }
         onUpdate?()
-
-        // 每 3 秒主循环
         mainTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in self.tick() }
-        // 每 3 秒 AI 轮询检查
         dsTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in self.checkDS() }
     }
 
-    // MARK: - 主循环 (纯IOKit触控, 无AutoTouch/Lua)
+    // MARK: - 4层视觉主循环
 
     private func tick() {
         guard isRunning else { mainTimer?.invalidate(); return }
         elapsed += 3
         status = "检测 \(elapsed)s"; onUpdate?()
 
-        // ① 最高优先级弹窗
-        for pt in priorityPoints { ve_click(pt.0, pt.1); usleep(200000) }
+        // ── 第一层: 固定坐标(最快) ──
+        for pt in priorityPoints { tap(pt.0, pt.1, source: "fixed", label: "priority"); usleep(150000) }
+        tap(cancelPoint.0, cancelPoint.1, source: "fixed", label: "cancel"); usleep(250000)
+        for (i, pt) in closePoints.enumerated() { tap(pt.0, pt.1, source: "fixed", label: "close\(i)"); usleep(150000) }
 
-        // ② 取消按钮
-        ve_click(cancelPoint.x, cancelPoint.y); usleep(300000)
+        // ── 第二层: 本地模板匹配 ──
+        if let screen = ScreenCapture.capture(maxWidth: 400, quality: 0.3) {
+            if let (pt, name) = LocalVision.matchBest(screen: screen, templates: templates,
+                imgDir: imgDir, threshold: 0.5) {
+                let scaledX = Float(pt.x / screen.size.width * 1242)
+                let scaledY = Float(pt.y / screen.size.height * 2208)
+                tap(scaledX, scaledY, source: "template", label: name)
+                Logger.log("模板命中: \(name)")
+            }
 
-        // ③ 关闭弹窗 (6个录制位置)
-        for pt in closePoints { ve_click(pt.0, pt.1); usleep(200000) }
-
-        // ④ AI未命中→触发DeepSeek (每15s限流)
-        if aiCallCount < aiMaxCalls, let last = lastAICall, Date().timeIntervalSince(last) < 15 {
-            // skip
-        } else {
-            triggerAI()
+            // ── 第三层: OCR文字识别 ──
+            let texts = LocalVision.ocrSync(image: screen, timeout: 2)
+            for (text, rect) in texts {
+                let kw = ["关闭","取消","确定","暂不","登录","公告","福利","商城"]
+                if kw.contains(where: { text.contains($0) }) {
+                    let x = Float(rect.midX * 1242), y = Float(rect.midY * 2208)
+                    ve_click(x, y)
+                    Logger.log("OCR命中: \(text) (\(x),\(y))")
+                    break
+                }
+            }
         }
 
-        // ⑤ 30s后点登录
+        // ── 第四层: DeepSeek AI推理 ──
+        triggerAI()
+
+        // ── 30s点登录 ──
         if elapsed >= 30, !loginTapped {
-            log("点击登录"); status = "点击登录"
-            ve_click(loginPoint.x, loginPoint.y)
-            loginTapped = true
-            Logger.log("登录已点击")
+            log("点击登录"); ve_click(loginPoint.0, loginPoint.1)
+            loginTapped = true; Logger.log("登录已点击")
         }
 
-        // ⑥ 超时
         if elapsed >= 100 { stop() }
     }
 
-    // MARK: - DeepSeek AI
+    // MARK: - AI
 
     private func triggerAI() {
         guard aiCallCount < aiMaxCalls else { return }
         if let last = lastAICall, Date().timeIntervalSince(last) < 15 { return }
         aiCallCount += 1; lastAICall = Date()
-        Logger.log("AI调用 \(aiCallCount)/\(aiMaxCalls)")
 
-        // 截图 → 上传 VL
-        guard let img = captureScreen() else { Logger.log("截图失败"); return }
+        guard let img = ScreenCapture.capture(maxWidth: 400, quality: 0.3) else { return }
         status = "AI分析..."; onUpdate?()
 
-        DeepSeekClient.analyze(image: img, prompt: "识别弹窗关闭按钮坐标,返回JSON") { result in
+        DeepSeekClient.analyze(image: img, prompt: "识别弹窗关闭按钮坐标,JSON:{x:数字,y:数字}") { result in
             DispatchQueue.main.async {
-                if case .success(let text) = result {
-                    Logger.log("AI返回: \(text.prefix(100))")
-                    // 提取坐标并点击
-                    if let x = self.extractCoord(text, key: "x"),
-                       let y = self.extractCoord(text, key: "y") {
+                if case .success(let txt) = result {
+                    Logger.log("AI: \(txt.prefix(80))")
+                    if let x = self.extract(txt, "x"), let y = self.extract(txt, "y") {
                         ve_click(Float(x), Float(y))
-                        Logger.log("AI点击: (\(x),\(y))")
                     }
                 }
             }
         }
     }
 
-    private func extractCoord(_ text: String, key: String) -> Int? {
-        guard let range = text.range(of: "\"\(key)\":\\s*(\\d+)", options: .regularExpression),
-              let numRange = text[range].range(of: "\\d+", options: .regularExpression)
-        else { return nil }
-        return Int(text[numRange])
-    }
-
-    // MARK: - 截图 (IOSurface 私有API)
-
-    private func captureScreen() -> UIImage? {
-        // 暂用 UIKit snapshot (仅截本app)
-        guard let window = UIApplication.shared.windows.first else { return nil }
-        let renderer = UIGraphicsImageRenderer(bounds: window.bounds)
-        return renderer.image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: false) }
+    private func extract(_ t: String, _ k: String) -> Int? {
+        guard let r = t.range(of: "\"\(k)\":\\s*(\\d+)", options: .regularExpression),
+              let n = t[r].range(of: "\\d+", options: .regularExpression) else { return nil }
+        return Int(t[n])
     }
 
     // MARK: - Helpers
 
+    // MARK: - 录制点击 (记录到MacroRecorder)
+
+    private func tap(_ x: Float, _ y: Float, source: String, label: String = "") {
+        ve_click(x, y)
+        MacroRecorder.record(x: x, y: y, source: source, label: label)
+    }
+
+    /// 回放已保存的宏
+    func replayMacro(name: String) {
+        guard let steps = MacroRecorder.load(name) else {
+            Logger.log("加载宏失败: \(name)"); return
+        }
+        Logger.log("回放: \(name) (\(steps.count)步)")
+        DispatchQueue.global().async {
+            for (i, s) in steps.enumerated() {
+                DispatchQueue.main.async { self.status = "回放 \(i+1)/\(steps.count)"; self.onUpdate?() }
+                ve_click(s.x, s.y)
+                usleep(200000)
+            }
+            DispatchQueue.main.async { self.status = "回放完成" }
+        }
+    }
+
+    func saveMacro(name: String) -> Bool { return MacroRecorder.save(name) }
+
     private func stop() {
         mainTimer?.invalidate(); dsTimer?.invalidate()
+        MacroRecorder.stopSession()
         status = "完成"; log("完成"); isRunning = false; onUpdate?()
     }
 
