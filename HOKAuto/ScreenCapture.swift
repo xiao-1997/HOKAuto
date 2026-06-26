@@ -48,7 +48,12 @@ struct ScreenCapture {
     }
 
     private static func captureRaw() -> UIImage? {
-        // ① UIGetScreenImage（私有API）
+        // ① IOMobileFramebuffer + IOSurface（底层帧缓冲，支持Metal游戏）
+        if let cg = ve_capture_screen() {
+            Logger.log("IOMobileFramebuffer 截图成功")
+            return UIImage(cgImage: cg)
+        }
+        // ② UIGetScreenImage（私有API）
         if let handle = dlopen(nil, RTLD_NOW) {
             if let fn = dlsym(handle, "UIGetScreenImage") {
                 typealias GetScreenFn = @convention(c) () -> Unmanaged<UIImage>?
@@ -57,7 +62,7 @@ struct ScreenCapture {
                 dlclose(handle)
             }
         }
-        // ② 降级：本app截图
+        // ③ 降级：本app截图
         guard let w = UIApplication.shared.windows.first else { return nil }
         let r = UIGraphicsImageRenderer(bounds: w.bounds)
         return r.image { _ in w.drawHierarchy(in: w.bounds, afterScreenUpdates: false) }
@@ -83,3 +88,6 @@ struct ScreenCapture {
 
 @_silgen_name("UIGetScreenImage")
 func UIGetScreenImage() -> Unmanaged<UIImage>?
+
+@_silgen_name("ve_capture_screen")
+func ve_capture_screen() -> CGImage?

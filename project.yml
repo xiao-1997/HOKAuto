@@ -8,7 +8,7 @@ targets:
   HOKAuto:
     type: application
     platform: iOS
-    sources: [HOKAuto]
+    sources: [HOKAuto, VisionEngine]
     dependencies:
       - framework: IOKit.framework
         embed: false
