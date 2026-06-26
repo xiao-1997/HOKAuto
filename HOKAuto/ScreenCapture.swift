@@ -47,14 +47,10 @@ struct ScreenCapture {
         }
     }
 
-    /// IOMobileFramebuffer 截图开关（调试通过后设为 true）
-    static var useIOMFB = false
-
     private static func captureRaw() -> UIImage? {
-        // ① IOMobileFramebuffer（底层帧缓冲，需先验证稳定性）
-        if useIOMFB, let cg = ve_capture_screen() {
-            Logger.log("IOMFB 截图成功")
-            return UIImage(cgImage: cg)
+        // ① 系统截图：activator 触发 Home+Lock → 取相册最新照片
+        if let img = captureViaActivator() {
+            return img
         }
         // ② UIGetScreenImage（私有API）
         if let handle = dlopen(nil, RTLD_NOW) {
@@ -69,6 +65,54 @@ struct ScreenCapture {
         guard let w = UIApplication.shared.windows.first else { return nil }
         let r = UIGraphicsImageRenderer(bounds: w.bounds)
         return r.image { _ in w.drawHierarchy(in: w.bounds, afterScreenUpdates: false) }
+    }
+
+    /// activator 触发系统截图 → 等待保存 → 取相册最新照片
+    private static func captureViaActivator() -> UIImage? {
+        // 触发系统截图 (等同 Home+Lock)
+        shell("su mobile -c 'activator send libactivator.system.screenshot'")
+
+        // 等待 SpringBoard 完成截图保存
+        usleep(1500000) // 1.5s
+
+        return fetchLatestPhoto()
+    }
+
+    /// 取相册最新一张照片
+    private static func fetchLatestPhoto() -> UIImage? {
+        let sem = DispatchSemaphore(value: 0)
+        var result: UIImage?
+
+        let opts = PHFetchOptions()
+        opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        opts.fetchLimit = 1
+
+        let assets = PHAsset.fetchAssets(with: .image, options: opts)
+        guard let latest = assets.firstObject else { return nil }
+
+        let reqOpts = PHImageRequestOptions()
+        reqOpts.isSynchronous = false
+        reqOpts.deliveryMode = .highQualityFormat
+
+        PHImageManager.default().requestImage(
+            for: latest,
+            targetSize: PHImageManagerMaximumSize,
+            contentMode: .default,
+            options: reqOpts
+        ) { image, _ in
+            result = image
+            sem.signal()
+        }
+        _ = sem.wait(timeout: .now() + 2)
+        return result
+    }
+
+    private static func shell(_ cmd: String) {
+        let a: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sh"), strdup("-c"), strdup(cmd), nil]
+        defer { a.forEach { if let p = $0 { free(p) } } }
+        var pid: pid_t = 0
+        posix_spawn(&pid, "/bin/sh", nil, nil, a, nil)
+        var s: Int32 = 0; waitpid(pid, &s, 0)
     }
 
     /// 缩放 + JPEG压缩
@@ -91,6 +135,3 @@ struct ScreenCapture {
 
 @_silgen_name("UIGetScreenImage")
 func UIGetScreenImage() -> Unmanaged<UIImage>?
-
-@_silgen_name("ve_capture_screen")
-func ve_capture_screen() -> CGImage?
