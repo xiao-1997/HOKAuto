@@ -40,29 +40,96 @@ struct ScreenCapture {
         }
     }
 
-    // MARK: - 截图策略（4级降级）
+    // MARK: - 截图策略（4级降级，含故障排查日志）
+
+    private static var diagSocketFail = false
+    private static var diagActivatorFail = false
+    private static var diagUIGetWhite = false
+    private static var diagDrawSelf = false
 
     private static func captureRaw() -> UIImage? {
-        // ① SpringBoard Socket（部署 dylib 后生效）
+        // ① SpringBoard Socket → 需要 Tweak 注入 SpringBoard + Respring
         if let img = captureViaSocket() {
-            Logger.log("截图:Socket")
+            if diagSocketFail { Logger.log("✅ Socket 已恢复"); diagSocketFail = false }
             return img
         }
-        // ② Activator 系统截图（等同 Home+Lock，相册取回）
+        if !diagSocketFail {
+            Logger.log("⚠ Socket 连接失败 → Tweak 未注入，需 Respring")
+            diagSocketFail = true
+        }
+
+        // ② Activator 系统截图 → 等同 Home+Lock，相册取回
         if let img = captureViaActivator() {
-            Logger.log("截图:Activator")
+            if diagActivatorFail { Logger.log("✅ Activator 已恢复"); diagActivatorFail = false }
             return img
         }
-        // ③ UIGetScreenImage（私有 API）
-        if let handle = dlopen(nil, RTLD_NOW) {
-            if let fn = dlsym(handle, "UIGetScreenImage") {
-                typealias GetScreenFn = @convention(c) () -> Unmanaged<UIImage>?
-                let getScreen = unsafeBitCast(fn, to: GetScreenFn.self)
-                if let img = getScreen()?.takeUnretainedValue() { dlclose(handle); return img }
-                dlclose(handle)
+        if !diagActivatorFail {
+            Logger.log("⚠ Activator 相册读取为空 → 截图延迟过高/相册权限缺失")
+            diagActivatorFail = true
+        }
+
+        // ③ UIGetScreenImage → 私有 API，Metal 游戏画面纯白
+        if let img = captureViaUIGetScreen() {
+            if isWhiteImage(img) {
+                if !diagUIGetWhite {
+                    Logger.log("⚠ UIGetScreenImage 纯白 → 前台是 Metal 游戏，私有 API 失效")
+                    diagUIGetWhite = true
+                }
+            } else {
+                if diagUIGetWhite { Logger.log("✅ UIGetScreenImage 已恢复"); diagUIGetWhite = false }
+                return img
             }
         }
-        // ④ 降级：本 app 截图
+
+        // ④ drawHierarchy → 仅能截本 app 自身窗口
+        if let img = captureViaDrawHierarchy() {
+            if !diagDrawSelf {
+                Logger.log("❌ 仅截取自身窗口 → 前三层全部故障，跨APP截图不可用")
+                diagDrawSelf = true
+            }
+            return img
+        }
+
+        return nil
+    }
+
+    /// 检测图片是否接近纯白（Metal 游戏白屏特征）
+    private static func isWhiteImage(_ img: UIImage) -> Bool {
+        guard let cg = img.cgImage,
+              let data = cg.dataProvider?.data,
+              let ptr = CFDataGetBytePtr(data) else { return false }
+        let w = cg.width, h = cg.height, bpr = cg.bytesPerRow
+        guard w > 0, h > 0 else { return false }
+        // 采样检测：取中间行和四角
+        var whitePixels = 0, total = 0
+        let rows = [0, h/4, h/2, h*3/4, h-1]
+        for y in rows {
+            for x in stride(from: 0, to: w, by: 10) {
+                let off = y * bpr + x * 4
+                guard off + 3 < CFDataGetLength(data) else { continue }
+                let r = ptr[off], g = ptr[off+1], b = ptr[off+2]
+                if r > 240, g > 240, b > 240 { whitePixels += 1 }
+                total += 1
+            }
+        }
+        return total > 20 && Float(whitePixels) / Float(total) > 0.9
+    }
+
+    // MARK: - ③ UIGetScreenImage
+
+    private static func captureViaUIGetScreen() -> UIImage? {
+        guard let handle = dlopen(nil, RTLD_NOW) else { return nil }
+        guard let fn = dlsym(handle, "UIGetScreenImage") else { dlclose(handle); return nil }
+        typealias GetScreenFn = @convention(c) () -> Unmanaged<UIImage>?
+        let getScreen = unsafeBitCast(fn, to: GetScreenFn.self)
+        let img = getScreen()?.takeUnretainedValue()
+        dlclose(handle)
+        return img
+    }
+
+    // MARK: - ④ drawHierarchy
+
+    private static func captureViaDrawHierarchy() -> UIImage? {
         guard let w = UIApplication.shared.windows.first else { return nil }
         let r = UIGraphicsImageRenderer(bounds: w.bounds)
         return r.image { _ in w.drawHierarchy(in: w.bounds, afterScreenUpdates: false) }
@@ -73,12 +140,10 @@ struct ScreenCapture {
     private static func captureViaActivator() -> UIImage? {
         let before = Date()
         shell("su mobile -c 'activator send libactivator.system.screenshot'")
-        // 轮询等新照片
         for _ in 0..<6 {
             usleep(500000)
             if let img = fetchPhoto(after: before) { return img }
         }
-        Logger.log("Activator截图超时")
         return nil
     }
 
@@ -129,13 +194,11 @@ struct ScreenCapture {
         }
         guard ret >= 0 else { close(fd); return nil }
 
-        // 读 4 字节长度
         var len: UInt32 = 0
         guard read(fd, &len, 4) == 4, len > 0, len < 5_000_000 else {
             close(fd); return nil
         }
 
-        // 读 JPEG 数据
         var data = Data(count: Int(len))
         let bytesRead = data.withUnsafeMutableBytes { buf in
             read(fd, buf.baseAddress!, Int(len))
@@ -143,7 +206,6 @@ struct ScreenCapture {
         close(fd)
 
         guard bytesRead == Int(len), let img = UIImage(data: data) else { return nil }
-        Logger.log("Socket截图 \(Int(img.size.width))x\(Int(img.size.height))")
         return img
     }
 
