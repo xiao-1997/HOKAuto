@@ -165,6 +165,56 @@ function Vision.ocrDetect(keywords)
     return results
 end
 
+--- 引擎 2b: 百度 PP-OCRv5 云端 OCR (对应 APK 的 libpaddleocr.so)
+--- 中文精度远高于 Vision OCR，需要 Swift 端配置 PaddleOCR 凭据
+--- @param keywords table 目标关键词列表
+--- @param timeout number 超时秒数 (云端接口较慢)
+--- @return table {{text, x, y, w, h, conf}, ...}
+function Vision.paddleDetect(keywords, timeout)
+    local reqFile = "/tmp/hok_paddle_req.txt"
+    local respFile = "/tmp/hok_paddle_resp.json"
+
+    local req = table.concat(keywords, "|")
+    local f = io.open(reqFile, "w")
+    if not f then return {} end
+    f:write(req)
+    f:close()
+
+    keepScreen(true)
+    snapshot("/tmp/hok_paddle_screen.png")
+    keepScreen(false)
+
+    local results = {}
+    local maxWait = (timeout or 8) * 10  -- 转为 0.1s 单位
+    for i = 1, maxWait do
+        usleep(100000) -- 0.1秒
+        if fileExists(respFile) then
+            local rf = io.open(respFile, "r")
+            if rf then
+                local raw = rf:read("*a")
+                rf:close()
+                os.remove(respFile)
+                os.remove(reqFile)
+                -- 解析: [{"text":"关闭","x":100,"y":200,"w":80,"h":40,"conf":0.98}, ...]
+                for text, x, y, w, h, conf in raw:gmatch(
+                    '"text":"([^"]-)","x":(%d-),"y":(%d-),"w":(%d-),"h":(%d-),"conf":([%d.]+)'
+                ) do
+                    table.insert(results, {
+                        text = text,
+                        x = tonumber(x),
+                        y = tonumber(y),
+                        w = tonumber(w),
+                        h = tonumber(h),
+                        confidence = tonumber(conf),
+                    })
+                end
+            end
+            break
+        end
+    end
+    return results
+end
+
 --- 引擎 3: YOLO 目标检测 (对应 APK 的 libyolo.so)
 --- @param classes table 目标类别 {"button","close_button","popup",...}
 --- @return table {{class, x, y, w, h, confidence}, ...}

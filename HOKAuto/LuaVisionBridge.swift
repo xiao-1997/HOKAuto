@@ -10,15 +10,19 @@ import CoreML
 ///   Lua 写入请求文件 → Swift 轮询处理 → 写入响应文件
 ///
 /// 请求类型:
-///   OCR:    /tmp/hok_ocr_req.txt     → /tmp/hok_ocr_resp.json
-///   YOLO:   /tmp/hok_yolo_req.txt    → /tmp/hok_yolo_resp.json
-///   DeepSeek: /tmp/hok_ds_req.txt    → /tmp/hok_ds_resp.json
-///   输入:   /tmp/hok_input_req.txt   → /tmp/hok_input_done.txt
+///   OCR:     /tmp/hok_ocr_req.txt      → /tmp/hok_ocr_resp.json   (Vision 本地)
+///   Paddle:  /tmp/hok_paddle_req.txt   → /tmp/hok_paddle_resp.json (百度云)
+///   YOLO:    /tmp/hok_yolo_req.txt     → /tmp/hok_yolo_resp.json
+///   DeepSeek:/tmp/hok_ds_req.txt       → /tmp/hok_ds_resp.json
+///   输入:    /tmp/hok_input_req.txt    → /tmp/hok_input_done.txt
 class LuaVisionBridge {
     static let shared = LuaVisionBridge()
 
     private var watchTimer: Timer?
     private var yoloModel: VNCoreMLModel?
+
+    /// 是否启用百度 PP-OCRv5 云端 OCR（需要先配置 PaddleOCRClient.apiKey/secretKey）
+    var usePaddleOCR = false
 
     // 文件监控间隔
     private let pollInterval: TimeInterval = 0.5
@@ -44,6 +48,7 @@ class LuaVisionBridge {
 
     private func pollAllRequests() {
         handleOCRRequest()
+        handlePaddleOCRRequest()
         handleYOLORequest()
         handleDeepSeekRequest()
         handleInputRequest()
@@ -113,6 +118,72 @@ class LuaVisionBridge {
         writeOCRResponse(path: respFile, results: hits)
         cleanup(reqFile, screenFile)
         Logger.log("LuaBridge OCR: 命中 \(hits.count) 个关键词")
+    }
+
+    // MARK: - 引擎1b: 百度 PP-OCRv5 云端 OCR
+
+    private func handlePaddleOCRRequest() {
+        let reqFile = "/tmp/hok_paddle_req.txt"
+        let respFile = "/tmp/hok_paddle_resp.json"
+        let screenFile = "/tmp/hok_paddle_screen.png"
+
+        guard usePaddleOCR,
+              FileManager.default.fileExists(atPath: reqFile),
+              let keywordsStr = try? String(contentsOfFile: reqFile, encoding: .utf8) else {
+            return
+        }
+
+        guard let screenImg = UIImage(contentsOfFile: screenFile) else {
+            writeOCRResponse(path: respFile, results: [])
+            cleanup(reqFile, screenFile)
+            return
+        }
+
+        let keywords = keywordsStr.components(separatedBy: "|").filter { !$0.isEmpty }
+        Logger.log("LuaBridge PaddleOCR: 检测关键词 \(keywords)")
+
+        // 使用百度 PP-OCRv5 云端识别
+        PaddleOCRClient.recognize(image: screenImg) { result in
+            var hits: [[String: Any]] = []
+
+            switch result {
+            case .success(let pages):
+                for page in pages {
+                    for line in page.lines {
+                        // 匹配关键词
+                        for kw in keywords {
+                            if line.text.contains(kw) {
+                                // rec_boxes 坐标 → 逻辑像素映射
+                                // PaddleOCR 返回的是图片实际像素坐标
+                                let scaleX: CGFloat = 1242.0 / screenImg.size.width
+                                let scaleY: CGFloat = 2208.0 / screenImg.size.height
+                                let x = Int(line.box.midX * scaleX)
+                                let y = Int(line.box.midY * scaleY)
+                                let w = Int(line.box.width * scaleX)
+                                let h = Int(line.box.height * scaleY)
+
+                                hits.append([
+                                    "text": line.text,
+                                    "x": x,
+                                    "y": y,
+                                    "w": w,
+                                    "h": h,
+                                    "conf": Double(line.confidence),
+                                ])
+                                break
+                            }
+                        }
+                    }
+                }
+                Logger.log("LuaBridge PaddleOCR: 命中 \(hits.count) 个关键词 (共\(pages.flatMap{$0.lines}.count)行)")
+
+            case .failure(let err):
+                Logger.log("LuaBridge PaddleOCR ERR: \(err.localizedDescription)")
+            }
+
+            self.writeOCRResponse(path: respFile, results: hits)
+            self.cleanup(reqFile, screenFile)
+        }
     }
 
     private func writeOCRResponse(path: String, results: [[String: Any]]) {
@@ -214,8 +285,7 @@ class LuaVisionBridge {
             return
         }
 
-        guard let screenImg = UIImage(contentsOfFile: screenFile),
-              let imageData = screenImg.jpegData(compressionQuality: 0.5) else {
+        guard let screenImg = UIImage(contentsOfFile: screenFile) else {
             writeDSResponse(path: respFile, action: "none", x: 0, y: 0)
             cleanup(reqFile, screenFile)
             return
@@ -223,8 +293,7 @@ class LuaVisionBridge {
 
         Logger.log("LuaBridge DeepSeek: \(prompt.prefix(80))")
 
-        let base64 = imageData.base64EncodedString()
-        DeepSeekClient.analyzeScreen(imageBase64: base64, prompt: prompt) { result in
+        DeepSeekClient.analyzeScreen(screenImage: screenImg, prompt: prompt) { result in
             switch result {
             case .success(let json):
                 self.writeDSResponse(path: respFile, json: json)
@@ -307,33 +376,81 @@ extension YOLODetector {
 
 extension DeepSeekClient {
     /// 分析屏幕截图（供 Lua 桥接调用）
-    static func analyzeScreen(imageBase64: String, prompt: String,
+    /// 优先用百度 PP-OCRv5（中文精度高）→ 降级 Vision OCR（本地离线）
+    /// 提取文字后用 DeepSeek 文本对话分析
+    static func analyzeScreen(screenImage: UIImage, prompt: String,
                                completion: @escaping (Result<String, Error>) -> Void) {
-        let systemPrompt = """
-        你是游戏自动化视觉助手。分析王者荣耀截图。
-        屏幕逻辑分辨率: 1242x2208 (iPhone Plus)。
+        // 检查是否配置了 PaddleOCR
+        let usePaddle = !PaddleOCRClient.apiKey.isEmpty && !PaddleOCRClient.secretKey.isEmpty
 
-        用户任务: \(prompt)
+        if usePaddle {
+            // 引擎1: 百度 PP-OCRv5（中文精度最高）
+            PaddleOCRClient.recognize(image: screenImage) { result in
+                let screenDesc: String
+                switch result {
+                case .success(let pages):
+                    let lines = pages.flatMap { $0.lines }.map { $0.text }
+                    screenDesc = lines.isEmpty ? "(无文字)" : lines.joined(separator: " | ")
+                    Logger.log("DeepSeek+PaddleOCR: \(lines.count) 行文字")
+                case .failure:
+                    screenDesc = "(PaddleOCR失败)"
+                }
+                analyzeWithText(screenDesc: screenDesc, prompt: prompt, completion: completion)
+            }
+        } else {
+            // 引擎2: Vision OCR 降级
+            guard let cgImage = screenImage.cgImage else {
+                completion(.failure(NSError(domain: "OCR", code: -1)))
+                return
+            }
+            let sem = DispatchSemaphore(value: 0)
+            var ocrTexts: [String] = []
+            let req = VNRecognizeTextRequest { request, _ in
+                ocrTexts = (request.results as? [VNRecognizedTextObservation])?
+                    .compactMap { $0.topCandidates(1).first?.string } ?? []
+                sem.signal()
+            }
+            req.recognitionLevel = .fast
+            req.usesLanguageCorrection = false
+            try? VNImageRequestHandler(cgImage: cgImage).perform([req])
+            _ = sem.wait(timeout: .now() + 3)
+
+            let screenDesc = ocrTexts.isEmpty ? "(无文字)" : ocrTexts.joined(separator: " | ")
+            Logger.log("DeepSeek+VisionOCR: \(ocrTexts.count) 行文字")
+            analyzeWithText(screenDesc: screenDesc, prompt: prompt, completion: completion)
+        }
+    }
+
+    /// DeepSeek 文本对话（OCR 结果 → 坐标决策）
+    private static func analyzeWithText(screenDesc: String, prompt: String,
+                                         completion: @escaping (Result<String, Error>) -> Void) {
+        let systemPrompt = """
+        你是游戏自动化视觉助手。根据屏幕OCR文字分析当前状态。
+        屏幕逻辑分辨率: 1242x2208 (iPhone Plus)。
 
         请返回严格JSON格式（只返回JSON，不要其他文字）:
         {
           "action": "click" 或 "none",
           "x": 点击X坐标(整数),
           "y": 点击Y坐标(整数),
-          "reason": "操作原因(中文,10字以内)"
+          "reason": "操作原因(中文,15字以内)"
         }
 
-        如果截图中没有可操作的目标，返回 action="none"。
+        如果OCR文字中没有可操作的目标，返回 action="none"。
+        常见按钮位置参考: 关闭按钮通常在右上角(x≈1800-2100, y≈100-200)
+        取消按钮通常在弹窗中部偏下(x≈600-1800, y≈600-1000)
+        确认按钮通常在弹窗底部(x≈600-1800, y≈1300-1800)
         """
 
-        let messages: [[String: Any]] = [
-            ["role": "system", "content": systemPrompt],
-            ["role": "user", "content": [
-                ["type": "text", "text": prompt],
-                ["type": "image_url", "image_url": ["url": "data:image/jpeg;base64," + imageBase64]],
-            ]],
-        ]
+        let textPrompt = """
+        任务: \(prompt)
 
-        chat(messages: messages, completion: completion)
+        屏幕OCR文字内容:
+        \(screenDesc)
+
+        请根据OCR文字判断当前屏幕状态，找到目标按钮的坐标。
+        """
+
+        chat(textPrompt, systemPrompt: systemPrompt, maxTokens: 300, completion: completion)
     }
 }
