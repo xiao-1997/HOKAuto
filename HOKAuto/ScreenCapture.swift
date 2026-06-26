@@ -47,10 +47,13 @@ struct ScreenCapture {
         }
     }
 
+    /// IOMobileFramebuffer 截图开关（调试通过后设为 true）
+    static var useIOMFB = false
+
     private static func captureRaw() -> UIImage? {
-        // ① IOMobileFramebuffer + IOSurface（底层帧缓冲，支持Metal游戏）
-        if let cg = ve_capture_screen() {
-            Logger.log("IOMobileFramebuffer 截图成功")
+        // ① IOMobileFramebuffer（底层帧缓冲，需先验证稳定性）
+        if useIOMFB, let cg = ve_capture_screen() {
+            Logger.log("IOMFB 截图成功")
             return UIImage(cgImage: cg)
         }
         // ② UIGetScreenImage（私有API）
