@@ -40,14 +40,20 @@ struct ScreenCapture {
         }
     }
 
-    // MARK: - 截图策略
+    // MARK: - 截图策略（4级降级）
 
     private static func captureRaw() -> UIImage? {
-        // ① SpringBoard Socket 截图（最佳：Metal 游戏 100% 兼容，内存直传）
+        // ① SpringBoard Socket（部署 dylib 后生效）
         if let img = captureViaSocket() {
+            Logger.log("截图:Socket")
             return img
         }
-        // ② UIGetScreenImage（私有 API）
+        // ② Activator 系统截图（等同 Home+Lock，相册取回）
+        if let img = captureViaActivator() {
+            Logger.log("截图:Activator")
+            return img
+        }
+        // ③ UIGetScreenImage（私有 API）
         if let handle = dlopen(nil, RTLD_NOW) {
             if let fn = dlsym(handle, "UIGetScreenImage") {
                 typealias GetScreenFn = @convention(c) () -> Unmanaged<UIImage>?
@@ -56,13 +62,55 @@ struct ScreenCapture {
                 dlclose(handle)
             }
         }
-        // ③ 降级：本 app 截图
+        // ④ 降级：本 app 截图
         guard let w = UIApplication.shared.windows.first else { return nil }
         let r = UIGraphicsImageRenderer(bounds: w.bounds)
         return r.image { _ in w.drawHierarchy(in: w.bounds, afterScreenUpdates: false) }
     }
 
-    // MARK: - SpringBoard Socket 截图
+    // MARK: - ② Activator 系统截图
+
+    private static func captureViaActivator() -> UIImage? {
+        let before = Date()
+        shell("su mobile -c 'activator send libactivator.system.screenshot'")
+        // 轮询等新照片
+        for _ in 0..<6 {
+            usleep(500000)
+            if let img = fetchPhoto(after: before) { return img }
+        }
+        Logger.log("Activator截图超时")
+        return nil
+    }
+
+    private static func fetchPhoto(after date: Date) -> UIImage? {
+        let opts = PHFetchOptions()
+        opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        opts.predicate = NSPredicate(format: "creationDate > %@", date as NSDate)
+        opts.fetchLimit = 1
+        guard let latest = PHAsset.fetchAssets(with: .image, options: opts).firstObject else { return nil }
+
+        let sem = DispatchSemaphore(value: 0)
+        var result: UIImage?
+        let req = PHImageRequestOptions()
+        req.isSynchronous = false
+        req.deliveryMode = .highQualityFormat
+        PHImageManager.default().requestImage(for: latest, targetSize: PHImageManagerMaximumSize,
+                                               contentMode: .default, options: req) { img, _ in
+            result = img; sem.signal()
+        }
+        _ = sem.wait(timeout: .now() + 3)
+        return result
+    }
+
+    private static func shell(_ cmd: String) {
+        let a: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sh"), strdup("-c"), strdup(cmd), nil]
+        defer { a.forEach { if let p = $0 { free(p) } } }
+        var pid: pid_t = 0
+        posix_spawn(&pid, "/bin/sh", nil, nil, a, nil)
+        var s: Int32 = 0; waitpid(pid, &s, 0)
+    }
+
+    // MARK: - ① SpringBoard Socket 截图
 
     private static let sockPath = "/var/mobile/Library/HOKAuto/cap.sock"
 
