@@ -32,6 +32,9 @@ DerivedData/
 ../script/
 ../docker-compose.yml
 
+# APK / large binaries
+*.apk
+
 # Temp
 /tmp/
 *.swp
