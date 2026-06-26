@@ -40,10 +40,11 @@ struct ScreenCapture {
         }
     }
 
-    // MARK: - 截图策略（4级降级，含故障排查日志）
+    // MARK: - 截图策略（5级降级，含故障排查日志）
 
     private static var diagSocketFail = false
     private static var diagActivatorFail = false
+    private static var diagShellFileFail = false
     private static var diagUIGetWhite = false
     private static var diagDrawSelf = false
 
@@ -64,11 +65,21 @@ struct ScreenCapture {
             return img
         }
         if !diagActivatorFail {
-            Logger.log("⚠ Activator 相册读取为空 → 截图延迟过高/相册权限缺失")
+            Logger.log("⚠ Activator 相册为空 → 需授权相册权限 + 等截图写入")
             diagActivatorFail = true
         }
 
-        // ③ UIGetScreenImage → 私有 API，Metal 游戏画面纯白
+        // ③ Shell 截图工具 → 直接写文件，不经过相册
+        if let img = captureViaShellFile() {
+            if diagShellFileFail { Logger.log("✅ Shell 截图已恢复"); diagShellFileFail = false }
+            return img
+        }
+        if !diagShellFileFail {
+            Logger.log("⚠ Shell 截图工具不可用 → 需安装 screencapture/snapshot 命令")
+            diagShellFileFail = true
+        }
+
+        // ④ UIGetScreenImage → 私有 API，Metal 游戏画面纯白
         if let img = captureViaUIGetScreen() {
             if isWhiteImage(img) {
                 if !diagUIGetWhite {
@@ -81,10 +92,10 @@ struct ScreenCapture {
             }
         }
 
-        // ④ drawHierarchy → 仅能截本 app 自身窗口
+        // ⑤ drawHierarchy → 仅能截本 app 自身窗口
         if let img = captureViaDrawHierarchy() {
             if !diagDrawSelf {
-                Logger.log("❌ 仅截取自身窗口 → 前三层全部故障，跨APP截图不可用")
+                Logger.log("❌ 仅截取自身窗口 → 前四层全部故障，跨APP截图不可用")
                 diagDrawSelf = true
             }
             return img
@@ -115,7 +126,7 @@ struct ScreenCapture {
         return total > 20 && Float(whitePixels) / Float(total) > 0.9
     }
 
-    // MARK: - ③ UIGetScreenImage
+    // MARK: - ④ UIGetScreenImage
 
     private static func captureViaUIGetScreen() -> UIImage? {
         guard let handle = dlopen(nil, RTLD_NOW) else { return nil }
@@ -127,7 +138,7 @@ struct ScreenCapture {
         return img
     }
 
-    // MARK: - ④ drawHierarchy
+    // MARK: - ⑤ drawHierarchy
 
     private static func captureViaDrawHierarchy() -> UIImage? {
         guard let w = UIApplication.shared.windows.first else { return nil }
@@ -135,15 +146,37 @@ struct ScreenCapture {
         return r.image { _ in w.drawHierarchy(in: w.bounds, afterScreenUpdates: false) }
     }
 
-    // MARK: - ② Activator 系统截图
+    // MARK: - ② Activator 系统截图 → 相册取回
 
     private static func captureViaActivator() -> UIImage? {
-        let before = Date()
-        shell("su mobile -c 'activator send libactivator.system.screenshot'")
-        for _ in 0..<6 {
-            usleep(500000)
-            if let img = fetchPhoto(after: before) { return img }
+        // 检查相册权限
+        let semAuth = DispatchSemaphore(value: 0)
+        var hasAuth = false
+        PHPhotoLibrary.requestAuthorization { status in
+            hasAuth = (status == .authorized || status == .limited)
+            semAuth.signal()
         }
+        _ = semAuth.wait(timeout: .now() + 2)
+
+        guard hasAuth else {
+            Logger.log("⚠ Activator: 相册权限未授予")
+            return nil
+        }
+
+        let before = Date()
+
+        // 触发系统截图
+        shell("su mobile -c 'activator send libactivator.system.screenshot' 2>/dev/null")
+
+        // 轮询相册（最多等8秒，游戏负载大时相册写入慢）
+        for i in 0..<16 {
+            usleep(500000) // 0.5s
+            if let img = fetchPhoto(after: before) {
+                Logger.log("  Activator 相册命中 (第\(i+1)次, \(String(format:"%.1f",Double(i+1)*0.5))s)")
+                return img
+            }
+        }
+        Logger.log("  Activator 等待8秒仍未在相册找到截图")
         return nil
     }
 
@@ -165,6 +198,40 @@ struct ScreenCapture {
         }
         _ = sem.wait(timeout: .now() + 3)
         return result
+    }
+
+    // MARK: - ③ Shell 截图工具 → 直接写文件，不经过相册
+
+    /// 已知的越狱截图命令行工具（按优先级）
+    private static let shellScreenshotCommands: [(cmd: String, path: String)] = [
+        // screencapture 来自 sbutils/chromium-ios-screenshot
+        ("su mobile -c 'screencapture -x /tmp/hok_shell.jpg 2>/dev/null'", "/tmp/hok_shell.jpg"),
+        // snapshot 来自某些越狱工具包
+        ("su mobile -c 'snapshot /tmp/hok_shell.png 2>/dev/null'", "/tmp/hok_shell.png"),
+        // activator 直接写文件（部分版本支持）
+        ("su mobile -c 'activator send libactivator.system.screenshot-to-file /tmp/hok_shell.jpg 2>/dev/null'", "/tmp/hok_shell.jpg"),
+        // 直接调用 screendump
+        ("su mobile -c 'screendump /tmp/hok_shell.png 2>/dev/null'", "/tmp/hok_shell.png"),
+    ]
+
+    private static func captureViaShellFile() -> UIImage? {
+        for (cmd, path) in shellScreenshotCommands {
+            // 清理旧文件
+            unlink(path)
+
+            shell(cmd)
+            usleep(800000) // 0.8s 等待截图写入
+
+            if let img = UIImage(contentsOfFile: path),
+               img.size.width > 100, img.size.height > 100,
+               !isWhiteImage(img) {
+                unlink(path) // 清理
+                Logger.log("✅ Shell截图成功: \(cmd.prefix(30))...")
+                return img
+            }
+            unlink(path) // 清理失败文件
+        }
+        return nil
     }
 
     private static func shell(_ cmd: String) {
