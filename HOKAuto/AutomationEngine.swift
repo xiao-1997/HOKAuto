@@ -9,6 +9,7 @@ class AutomationEngine {
     private var mainTimer: Timer?
     private var elapsed = 0
     private var loginTapped = false
+    private var gameLoaded = false
 
     // 自适应校验: 5→10→20
     private var verifyInterval = 5
@@ -69,6 +70,9 @@ class AutomationEngine {
 
     // MARK: - Tick（空闲模式：弹窗守护）
 
+    /// 游戏大厅关键词（检测到则判定加载完成）
+    private let lobbyKeywords = ["开始游戏", "商城", "英雄", "备战", "铭文"]
+
     private func tick() {
         guard isRunning else { mainTimer?.invalidate(); return }
 
@@ -76,7 +80,24 @@ class AutomationEngine {
         if isExecutingTask { return }
 
         elapsed += 3; tickCount += 1
-        status = "守护 \(elapsed)s [\(tickCount)/\(verifyInterval)]"; onUpdate?()
+
+        // ── 游戏加载检测 ──
+        if !gameLoaded {
+            guard let screen = ScreenCapture.capture(maxWidth: 600, quality: 0.4) else { return }
+            let results = LocalVision.ocrSync(image: screen)
+            let allText = results.map { $0.text }.joined(separator: " ")
+            if lobbyKeywords.contains(where: { allText.contains($0) }) {
+                gameLoaded = true
+                status = "已加载"; onUpdate?()
+                Logger.log("游戏加载完成")
+            } else {
+                status = "等待加载 \(elapsed)s"; onUpdate?()
+                Logger.log("等待加载...")
+                return
+            }
+        }
+
+        status = "守护 \(elapsed)s"; onUpdate?()
 
         // ① 弹窗消除（CoordCache 快速路径）
         let popups = cache.popupEntries()
@@ -94,15 +115,16 @@ class AutomationEngine {
             verifyWithCache()
         }
 
-        // ③ 定期全量OCR扫描（非校验轮，每15s）
+        // ③ 全量OCR扫描（非校验轮，游戏加载后每5s）
+        let scanInterval: TimeInterval = gameLoaded ? 5 : 15
         let now = Date()
         if !needVerify,
-           lastLocalScan == nil || now.timeIntervalSince(lastLocalScan!) >= 15 {
+           lastLocalScan == nil || now.timeIntervalSince(lastLocalScan!) >= scanInterval {
             scanAndCache()
         }
 
-        // ④ 登录检测（30s后）
-        if elapsed >= 30, !loginTapped {
+        // ④ 登录检测（游戏加载后20s）
+        if gameLoaded, elapsed >= 20, !loginTapped {
             let command = semantic.parse("点击登录按钮")
             if let screen = ScreenCapture.capture(maxWidth: 640, quality: 0.5),
                let hit = semantic.findTarget(command: command, cache: cache,
