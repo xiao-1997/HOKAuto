@@ -41,5 +41,9 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>调试用途：保存截图以便分析OCR识别效果</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>调试用途：保存截图以便分析OCR识别效果</string>
 </dict>
 </plist>

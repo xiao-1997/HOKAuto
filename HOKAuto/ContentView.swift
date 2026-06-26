@@ -16,10 +16,7 @@ struct ContentView: View {
     private let quickCommands = [
         "充值60点券",
         "充值475点券",
-        "登录账号",
-        "每日签到",
-        "打开商城",
-        "领取奖励",
+        "充值948点券",
     ]
 
     var body: some View {
@@ -40,20 +37,21 @@ struct ContentView: View {
                     // 日志
                     logArea
 
-                    // 启动/停止按钮
-                    if isRunning {
+                    // 启动/停止/取消按钮
+                    if isExecutingTask {
+                        // 任务执行中 → 取消任务按钮
+                        Button(action: cancelTaskOnly) {
+                            Text("⏹ 取消任务")
+                                .font(.system(size: 20, weight: .bold)).foregroundColor(.white)
+                                .frame(maxWidth: .infinity).frame(height: 54)
+                                .background(Color.orange).cornerRadius(14)
+                        }
+                    } else if isRunning {
                         Button(action: stopEngine) {
-                            HStack {
-                                if isExecutingTask {
-                                    Image(systemName: "hourglass")
-                                    Text("⏹ 停止 (任务执行中)")
-                                } else {
-                                    Text("⏹ 停止")
-                                }
-                            }
-                            .font(.system(size: 20, weight: .bold)).foregroundColor(.white)
-                            .frame(maxWidth: .infinity).frame(height: 54)
-                            .background(Color.red).cornerRadius(14)
+                            Text("⏹ 停止自动化")
+                                .font(.system(size: 20, weight: .bold)).foregroundColor(.white)
+                                .frame(maxWidth: .infinity).frame(height: 54)
+                                .background(Color.red).cornerRadius(14)
                         }
                     } else {
                         Button(action: startEngine) {
@@ -277,6 +275,13 @@ struct ContentView: View {
         logs = engine.logs
         isRunning = false
         isExecutingTask = false
+    }
+
+    private func cancelTaskOnly() {
+        engine.cancelTask()
+        isExecutingTask = false
+        logs = engine.logs + "\n>>> 任务已取消\n"
+        status = "守护中"
     }
 
     private func executeTask() {

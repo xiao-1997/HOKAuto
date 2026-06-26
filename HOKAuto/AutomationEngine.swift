@@ -43,6 +43,9 @@ class AutomationEngine {
         try? FileManager.default.createDirectory(atPath: imgDir, withIntermediateDirectories: true)
         migrateImages()
 
+        // 调试模式：截图保存到相册（正式发布时关闭）
+        ScreenCapture.debugSaveToPhotos = true
+
         // 异步预热 YOLO 模型
         DispatchQueue.global().async { _ = self.yolo.loadModel() }
 
