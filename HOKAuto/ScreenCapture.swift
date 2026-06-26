@@ -153,7 +153,11 @@ struct ScreenCapture {
         let semAuth = DispatchSemaphore(value: 0)
         var hasAuth = false
         PHPhotoLibrary.requestAuthorization { status in
-            hasAuth = (status == .authorized || status == .limited)
+            if #available(iOS 14, *) {
+                hasAuth = (status == .authorized || status == .limited)
+            } else {
+                hasAuth = (status == .authorized)
+            }
             semAuth.signal()
         }
         _ = semAuth.wait(timeout: .now() + 2)
