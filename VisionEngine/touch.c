@@ -1,11 +1,15 @@
 /*
- * touch.c - GSEvent 私有API 触控注入 (iOS 13 checkra1n 可用)
- * 无 AutoTouch 依赖, 直接向 backboardd 发送触控事件
+ * touch.c - GSEvent 私有API 触控注入 + IOMobileFramebuffer 截图
+ * iOS 13+ jailbreak 可用
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <dlfcn.h>
+#include <CoreFoundation/CoreFoundation.h>
+#include <CoreGraphics/CoreGraphics.h>
+#include <IOKit/IOKitLib.h>
 
 // GSEvent 结构 (iOS 13)
 typedef struct __GSEvent *GSEventRef;
@@ -83,4 +87,105 @@ void ve_swipe(float x1, float y1, float x2, float y2, int ms) {
         gs_send(x, y, (i==0)?1:(i==steps)?3:2);
         usleep(10000);
     }
+}
+
+// ── IOMobileFramebuffer 截图 (解决GPU渲染白屏) ──
+// 通过 IOMobileFramebuffer 获取显示层的 IOSurface，直接读像素
+
+// 私有 IOMobileFramebuffer 函数声明
+typedef kern_return_t (*IOMobileFramebufferGetLayerDefaultSurface_t)(
+    io_connect_t connect, int layer, unsigned *surfaceID);
+
+CGImageRef ve_capture_screen(void) {
+    // 打开 IOMobileFramebuffer 服务
+    io_service_t fb = IOServiceGetMatchingService(
+        kIOMasterPortDefault,
+        IOServiceMatching("IOMobileFramebuffer"));
+    if (!MACH_PORT_VALID(fb)) {
+        printf("[capture] IOMobileFramebuffer service not found\n");
+        return NULL;
+    }
+
+    io_connect_t connect;
+    kern_return_t kr = IOServiceOpen(fb, mach_task_self(), 0, &connect);
+    IOObjectRelease(fb);
+    if (kr != KERN_SUCCESS) {
+        printf("[capture] IOServiceOpen failed: %d\n", kr);
+        return NULL;
+    }
+
+    // 动态加载 IOMobileFramebufferGetLayerDefaultSurface
+    void *iofb = dlopen("/System/Library/PrivateFrameworks/IOMobileFramebuffer.framework/IOMobileFramebuffer", RTLD_NOW);
+    if (!iofb) {
+        printf("[capture] IOMobileFramebuffer.framework not found\n");
+        IOServiceClose(connect);
+        return NULL;
+    }
+
+    IOMobileFramebufferGetLayerDefaultSurface_t getSurface =
+        (IOMobileFramebufferGetLayerDefaultSurface_t)dlsym(iofb, "IOMobileFramebufferGetLayerDefaultSurface");
+    if (!getSurface) {
+        printf("[capture] GetLayerDefaultSurface not found\n");
+        dlclose(iofb);
+        IOServiceClose(connect);
+        return NULL;
+    }
+
+    // 获取图层0的 IOSurface ID
+    unsigned surfaceID = 0;
+    kr = getSurface(connect, 0, &surfaceID);
+    IOServiceClose(connect);
+
+    if (kr != KERN_SUCCESS || surfaceID == 0) {
+        printf("[capture] GetLayerDefaultSurface failed: %d id=%u\n", kr, surfaceID);
+        dlclose(iofb);
+        return NULL;
+    }
+
+    printf("[capture] Surface ID: %u\n", surfaceID);
+
+    // 用 IOSurfaceLookup 获取 surface
+    void *iosurf = dlopen("/System/Library/Frameworks/IOSurface.framework/IOSurface", RTLD_NOW);
+    if (!iosurf) { dlclose(iofb); return NULL; }
+
+    typedef void* (*IOSurfaceLookup_t)(int);
+    typedef int (*IOSurfaceGetWidth_t)(void*);
+    typedef int (*IOSurfaceGetHeight_t)(void*);
+    typedef int (*IOSurfaceGetBytesPerRow_t)(void*);
+    typedef void* (*IOSurfaceGetBaseAddress_t)(void*);
+
+    IOSurfaceLookup_t surfLookup = (IOSurfaceLookup_t)dlsym(iosurf, "IOSurfaceLookup");
+    IOSurfaceGetWidth_t surfW = (IOSurfaceGetWidth_t)dlsym(iosurf, "IOSurfaceGetWidth");
+    IOSurfaceGetHeight_t surfH = (IOSurfaceGetHeight_t)dlsym(iosurf, "IOSurfaceGetHeight");
+    IOSurfaceGetBytesPerRow_t surfBPR = (IOSurfaceGetBytesPerRow_t)dlsym(iosurf, "IOSurfaceGetBytesPerRow");
+    IOSurfaceGetBaseAddress_t surfBase = (IOSurfaceGetBaseAddress_t)dlsym(iosurf, "IOSurfaceGetBaseAddress");
+
+    CGImageRef result = NULL;
+    if (surfLookup && surfW && surfH && surfBPR && surfBase) {
+        void *surface = surfLookup((int)surfaceID);
+        if (surface) {
+            int w = surfW(surface);
+            int h = surfH(surface);
+            int bpr = surfBPR(surface);
+            void *base = surfBase(surface);
+
+            if (base && w > 0 && h > 0 && bpr > 0) {
+                printf("[capture] IOMobileFramebuffer %dx%d bpr=%d\n", w, h, bpr);
+                CGDataProviderRef provider = CGDataProviderCreateWithData(
+                    NULL, base, h * bpr, NULL);
+                if (provider) {
+                    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+                    result = CGImageCreate(w, h, 8, 32, bpr, cs,
+                        kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst,
+                        provider, NULL, true, kCGRenderingIntentDefault);
+                    CGColorSpaceRelease(cs);
+                    CGDataProviderRelease(provider);
+                }
+            }
+        }
+    }
+
+    dlclose(iosurf);
+    dlclose(iofb);
+    return result;
 }

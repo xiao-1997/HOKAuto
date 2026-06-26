@@ -59,11 +59,16 @@ struct ScreenCapture {
     private typealias IOSurfaceGetPixelFormatFunc = @convention(c) (CFTypeRef) -> UInt32
 
     private static func captureRaw() -> UIImage? {
-        // ── ① IOSurface 直接读帧缓冲（支持 GPU/Metal 渲染的游戏画面）──
+        // ── ① IOMobileFramebuffer 帧缓冲（模拟Home+关机键截图）──
+        if let img = captureFramebuffer() {
+            Logger.log("IOMobileFramebuffer截图成功")
+            return img
+        }
+        // ── ② IOSurface 直接读帧缓冲 ──
         if let img = captureIOSurface() {
             return img
         }
-        Logger.log("IOSurface截图失败，尝试UIGetScreenImage...")
+        Logger.log("帧缓冲截图失败，尝试UIGetScreenImage...")
 
         // ── ② UIGetScreenImage（私有API）──
         if let handle = dlopen(nil, RTLD_NOW) {
@@ -78,6 +83,14 @@ struct ScreenCapture {
         guard let w = UIApplication.shared.windows.first else { return nil }
         let r = UIGraphicsImageRenderer(bounds: w.bounds)
         return r.image { _ in w.drawHierarchy(in: w.bounds, afterScreenUpdates: false) }
+    }
+
+    // MARK: - IOMobileFramebuffer 截图（模拟Home+关机键）
+
+    /// 通过 IOMobileFramebuffer 获取显示层帧缓冲（等同于系统截图）
+    private static func captureFramebuffer() -> UIImage? {
+        guard let cgImage = ve_capture_screen() else { return nil }
+        return UIImage(cgImage: cgImage)
     }
 
     /// 通过 IOSurface 直接读取屏幕帧缓冲，解决 GPU/Metal 渲染游戏白屏问题
@@ -166,3 +179,6 @@ struct ScreenCapture {
 
 @_silgen_name("UIGetScreenImage")
 func UIGetScreenImage() -> Unmanaged<UIImage>?
+
+@_silgen_name("ve_capture_screen")
+func ve_capture_screen() -> CGImage?

@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var taskText = ""
     @State private var showCoordEditor = false
     @State private var coordJSON = CoordCache.shared.exportJSON()
+    @State private var isRecording = false
     private let engine = AutomationEngine()
 
     // 快捷指令
@@ -59,6 +60,23 @@ struct ContentView: View {
                                 .font(.system(size: 20, weight: .bold)).foregroundColor(.white)
                                 .frame(maxWidth: .infinity).frame(height: 54)
                                 .background(Color(hex: "667eea")).cornerRadius(14)
+                        }
+                    }
+
+                    // 录制开关（引擎运行时可用）
+                    HStack {
+                        Button(action: toggleRecording) {
+                            HStack(spacing: 6) {
+                                Image(systemName: isRecording ? "record.circle.fill" : "record.circle")
+                                Text(isRecording ? "⏺ 停止录制" : "⏺ 录制人工点击")
+                            }
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(isRecording ? .red : Color(hex: "FFD700"))
+                            .frame(maxWidth: .infinity).frame(height: 40)
+                            .background(Color.white.opacity(0.08))
+                            .overlay(RoundedRectangle(cornerRadius: 10)
+                                .stroke(isRecording ? Color.red.opacity(0.6) : Color(hex: "FFD700").opacity(0.3)))
+                            .cornerRadius(10)
                         }
                     }
 
@@ -282,6 +300,13 @@ struct ContentView: View {
         isExecutingTask = false
         logs = engine.logs + "\n>>> 任务已取消\n"
         status = "守护中"
+    }
+
+    private func toggleRecording() {
+        isRecording.toggle()
+        MacroRecorder.isRecording = isRecording
+        if isRecording { MacroRecorder.startSession() }
+        logs = isRecording ? logs + "\n>>> 开始录制人工点击\n" : logs + "\n>>> 停止录制\n"
     }
 
     private func executeTask() {
