@@ -238,7 +238,7 @@ struct ContentView: View {
                     .padding()
                 }
             }
-            .navigationTitle("预设坐标管理")
+            .navigationBarTitle("预设坐标管理", displayMode: .inline)
             .background(Color(hex: "0D0D1A"))
         }
     }

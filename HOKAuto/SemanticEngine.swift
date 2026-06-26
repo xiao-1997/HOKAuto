@@ -262,7 +262,7 @@ class SemanticEngine {
             }
         }
 
-        return best
+        return best?.hit
     }
 
     // MARK: - OCR 关联
@@ -272,17 +272,17 @@ class SemanticEngine {
         detection: YOLODetection,
         ocrResults: [(text: String, rect: CGRect)]
     ) -> [(text: String, overlapRatio: Float)] {
-        var associated: [(String, Float)] = []
+        var associated: [(text: String, overlapRatio: Float)] = []
         for (text, ocrRect) in ocrResults {
             let intersection = detection.bbox.intersection(ocrRect)
             if intersection.isNull { continue }
             let overlap = Float(intersection.width * intersection.height) /
                           Float(ocrRect.width * ocrRect.height)
             if overlap > 0.10 {
-                associated.append((text, overlap))
+                associated.append((text: text, overlapRatio: overlap))
             }
         }
-        return associated.sorted { $0.overlapRatio > $1.overlapRatio }
+        return associated.sorted { a, b in a.overlapRatio > b.overlapRatio }
     }
 
     // MARK: - 评分
