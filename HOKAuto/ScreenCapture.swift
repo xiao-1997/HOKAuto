@@ -55,7 +55,7 @@ struct ScreenCapture {
     private typealias IOSurfaceGetWidthFunc = @convention(c) (CFTypeRef) -> Int
     private typealias IOSurfaceGetHeightFunc = @convention(c) (CFTypeRef) -> Int
     private typealias IOSurfaceGetBytesPerRowFunc = @convention(c) (CFTypeRef) -> Int
-    private typealias IOSurfaceGetBaseAddressFunc = @convention(c) (CFTypeRef) -> UnsafeMutableRawPointer
+    private typealias IOSurfaceGetBaseAddressFunc = @convention(c) (CFTypeRef) -> UnsafeMutableRawPointer?
     private typealias IOSurfaceGetPixelFormatFunc = @convention(c) (CFTypeRef) -> UInt32
 
     private static func captureRaw() -> UIImage? {
