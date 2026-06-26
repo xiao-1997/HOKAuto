@@ -12,6 +12,12 @@ targets:
     dependencies:
       - framework: IOKit.framework
         embed: false
+      - framework: CoreML.framework
+        embed: false
+      - framework: Vision.framework
+        embed: false
+      - framework: Accelerate.framework
+        embed: false
     settings:
       base:
         INFOPLIST_FILE: HOKAuto/Info.plist

@@ -116,6 +116,39 @@ class FloatingHUD {
         }
     }
 
+    // MARK: - 任务进度
+
+    /// 显示任务执行进度
+    func showTaskProgress(_ progress: TaskProgress) {
+        DispatchQueue.main.async {
+            self.stepLabel?.text = "任务 [\(progress.stepIndex)/\(progress.totalSteps)] \(progress.stepDesc)"
+            self.stepLabel?.textColor = .white
+            self.statusLabel?.text = "⏳ \(progress.status)"
+            self.statusLabel?.textColor = UIColor(red: 0, green: 1, blue: 0.53, alpha: 1)
+        }
+    }
+
+    /// 显示任务结果
+    func showTaskResult(_ result: TaskResult) {
+        DispatchQueue.main.async {
+            if result.success {
+                self.stepLabel?.text = "✅ 任务完成"
+                self.stepLabel?.textColor = UIColor(red: 0, green: 1, blue: 0.53, alpha: 1)
+                self.statusLabel?.text = "\(result.completedSteps)/\(result.totalSteps)步成功"
+            } else {
+                self.stepLabel?.text = "❌ 任务失败"
+                self.stepLabel?.textColor = UIColor(red: 1, green: 0.6, blue: 0, alpha: 1)
+                self.statusLabel?.text = result.errorMessage ?? "未知错误"
+            }
+            // 3秒后恢复
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                self.stepLabel?.text = "守护中..."
+                self.stepLabel?.textColor = .white
+                self.statusLabel?.text = "等待指令"
+            }
+        }
+    }
+
     /// 操作步骤进度
     enum StepState {
         case pending(String)
