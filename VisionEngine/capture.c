@@ -90,7 +90,7 @@ CGImageRef ve_capture_screen(void) {
     // ── 1. 打开 IOMobileFramebuffer 服务 ──
     void *fb = NULL;
     kern_return_t kr = p_IOMobileFramebufferOpen(
-        mach_task_self(), 0, 0, &fb);  // 修正参数类型
+        NULL, mach_task_self(), 0, &fb);
     if (kr != KERN_SUCCESS || !fb) {
         printf("[capture] IOMobileFramebufferOpen 失败 kr=%d\n", kr);
         return NULL;

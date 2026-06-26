@@ -23,15 +23,44 @@ workflows:
             -destination 'generic/platform=iOS' \
             CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO -derivedDataPath build
+      - name: Build ScreenCapServer dylib
+        script: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          clang -arch arm64 -isysroot "$SDK" -miphoneos-version-min=13.0 \
+            -dynamiclib -fobjc-arc \
+            -framework UIKit -framework Foundation -framework CoreGraphics \
+            -o Tweak/ScreenCapServer.dylib Tweak/ScreenCapServer.m
+          ldid -S Tweak/ScreenCapServer.dylib
+          echo "dylib built: $(file Tweak/ScreenCapServer.dylib)"
       - name: Create .deb
         script: |
           brew install dpkg ldid-procursus
-          mkdir -p deb/DEBIAN deb/Applications
+
+          # App
+          mkdir -p deb/Applications
           FOUND=$(find build -name "HOKAuto.app" -type d | head -1)
           APP="${FOUND:-build/Build/Products/Debug-iphoneos/HOKAuto.app}"
           echo "App path: $APP"
           cp -r "$APP" deb/Applications/
           ldid -S deb/Applications/HOKAuto.app/HOKAuto
+
+          # Tweak dylib → MobileSubstrate
+          mkdir -p deb/Library/MobileSubstrate/DynamicLibraries
+          cp Tweak/ScreenCapServer.dylib deb/Library/MobileSubstrate/DynamicLibraries/
+          cat > deb/Library/MobileSubstrate/DynamicLibraries/ScreenCapServer.plist << 'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>Filter</key>
+            <dict><key>Bundles</key><array><string>com.apple.springboard</string></array></dict>
+          </dict></plist>
+          PLIST
+
+          # HOKAuto Socket 目录
+          mkdir -p deb/var/mobile/Library/HOKAuto
+
+          # DEBIAN control
+          mkdir -p deb/DEBIAN
           cat > deb/DEBIAN/control << 'EOF'
           Package: com.automation.hokauto
           Name: HOK Auto
@@ -45,10 +74,13 @@ workflows:
           cd /Applications/HOKAuto.app
           if command -v ldid &>/dev/null; then
             ldid -S HOKAuto
-            ldid -S HOKAuto.debug.dylib 2>/dev/null || true
           fi
           chmod 777 HOKAuto
           chown -R mobile:mobile .
+          # Tweak 注入权限
+          mkdir -p /var/mobile/Library/HOKAuto
+          chown mobile:mobile /var/mobile/Library/HOKAuto
+          chmod 755 /var/mobile/Library/HOKAuto
           uicache -a
           killall SpringBoard 2>/dev/null || true
           EOF

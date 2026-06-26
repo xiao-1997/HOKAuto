@@ -44,7 +44,12 @@ class AutomationEngine {
         try? FileManager.default.createDirectory(atPath: imgDir, withIntermediateDirectories: true)
         migrateImages()
 
-        // 调试模式：截图保存到相册（正式发布时关闭）
+        // 自动开始录制人工点击
+        MacroRecorder.isRecording = true
+        MacroRecorder.startSession()
+        Logger.log("开始录制人工点击")
+
+        // 调试模式：截图保存到相册（调试时开启，正式关闭）
         ScreenCapture.debugSaveToPhotos = true
 
         // 异步预热 YOLO 模型
@@ -64,7 +69,17 @@ class AutomationEngine {
     }
 
     private func stop() {
-        mainTimer?.invalidate(); status = "完成"; log("完成"); isRunning = false; onUpdate?()
+        mainTimer?.invalidate()
+        // 自动保存录制
+        if MacroRecorder.isRecording {
+            let name = "auto_\(Int(Date().timeIntervalSince1970))"
+            if MacroRecorder.save(name) {
+                Logger.log("录制已保存: \(name)")
+                log("录制已保存: \(name)")
+            }
+            MacroRecorder.isRecording = false
+        }
+        status = "完成"; log("完成"); isRunning = false; onUpdate?()
         CoordCache.shared.save()
     }
 
@@ -88,12 +103,33 @@ class AutomationEngine {
             let allText = results.map { $0.text }.joined(separator: " ")
             if lobbyKeywords.contains(where: { allText.contains($0) }) {
                 gameLoaded = true
-                status = "已加载"; onUpdate?()
-                Logger.log("游戏加载完成")
+                status = "已加载，冷却中"; onUpdate?()
+                Logger.log("游戏加载完成，等待10s冷却")
             } else {
                 status = "等待加载 \(elapsed)s"; onUpdate?()
                 Logger.log("等待加载...")
-                return
+            }
+            return
+        }
+
+        // ── 加载后 10s 冷却期：不动，等游戏稳定 ──
+        if elapsed < 10 {
+            status = "冷却 \(elapsed)/10s"; onUpdate?()
+            return
+        }
+
+        // ── 加载后 20s 开始截图检测登录 ──
+        if !loginTapped, elapsed >= 20 {
+            status = "检测登录 \(elapsed)s"; onUpdate?()
+            Logger.log("截图检测登录")
+            guard let screen = ScreenCapture.capture(maxWidth: 640, quality: 0.5) else { return }
+            let command = semantic.parse("点击登录按钮")
+            if let hit = semantic.findTarget(command: command, cache: cache,
+                                             screen: screen, yolo: yolo) {
+                click(hit.x, hit.y); loginTapped = true
+                Logger.log("登录: (\(Int(hit.x)),\(Int(hit.y))) [\(hit.source)]")
+            } else {
+                // 登录未命中，继续弹窗消除
             }
         }
 
@@ -115,23 +151,11 @@ class AutomationEngine {
             verifyWithCache()
         }
 
-        // ③ 全量OCR扫描（非校验轮，游戏加载后每5s）
-        let scanInterval: TimeInterval = gameLoaded ? 5 : 15
+        // ③ 全量OCR扫描（非校验轮，每5s）
         let now = Date()
         if !needVerify,
-           lastLocalScan == nil || now.timeIntervalSince(lastLocalScan!) >= scanInterval {
+           lastLocalScan == nil || now.timeIntervalSince(lastLocalScan!) >= 5 {
             scanAndCache()
-        }
-
-        // ④ 登录检测（游戏加载后20s）
-        if gameLoaded, elapsed >= 20, !loginTapped {
-            let command = semantic.parse("点击登录按钮")
-            if let screen = ScreenCapture.capture(maxWidth: 640, quality: 0.5),
-               let hit = semantic.findTarget(command: command, cache: cache,
-                                             screen: screen, yolo: yolo) {
-                click(hit.x, hit.y); loginTapped = true
-                Logger.log("登录: (\(Int(hit.x)),\(Int(hit.y))) [\(hit.source)]")
-            }
         }
 
         if elapsed >= 600 { stop() } // 10分钟自动停止

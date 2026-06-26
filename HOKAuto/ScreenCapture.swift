@@ -5,19 +5,19 @@ import Photos
 /// 截图工具
 struct ScreenCapture {
 
-    /// 调试模式：每张截图保存到相册（调试完成后关闭）
-    static var debugSaveToPhotos = false
+    /// 调试：保存到相册
+    static var debugSaveToPhotos = true
 
     static func capture(maxWidth: CGFloat = 600, quality: CGFloat = 0.5) -> UIImage? {
         var attempts = 0
         while attempts < 3 {
             if let raw = captureRaw() {
-                let opt = optimize(raw, maxWidth: maxWidth, quality: quality)
-                Logger.log("截图成功 \(Int(opt.size.width))x\(Int(opt.size.height))")
-
+                // 保存原始截图到相册（调试用）
                 if debugSaveToPhotos {
                     saveToAlbum(raw)
                 }
+                let opt = optimize(raw, maxWidth: maxWidth, quality: quality)
+                Logger.log("截图成功 \(Int(opt.size.width))x\(Int(opt.size.height))")
                 return opt
             }
             attempts += 1
@@ -31,28 +31,23 @@ struct ScreenCapture {
     /// 保存到系统相册
     static func saveToAlbum(_ image: UIImage) {
         PHPhotoLibrary.requestAuthorization { status in
-            guard status == .authorized else {
-                Logger.log("相册权限未授权")
-                return
-            }
+            guard status == .authorized else { return }
             PHPhotoLibrary.shared().performChanges {
                 PHAssetCreationRequest.creationRequestForAsset(from: image)
-            } completionHandler: { success, error in
-                if success {
-                    Logger.log("截图已保存到相册")
-                } else {
-                    Logger.log("保存相册失败: \(error?.localizedDescription ?? "")")
-                }
+            } completionHandler: { success, _ in
+                if success { Logger.log("已保存到相册") }
             }
         }
     }
 
+    // MARK: - 截图策略
+
     private static func captureRaw() -> UIImage? {
-        // ① 系统截图：activator 触发 Home+Lock → 取相册最新照片
-        if let img = captureViaActivator() {
+        // ① SpringBoard Socket 截图（最佳：Metal 游戏 100% 兼容，内存直传）
+        if let img = captureViaSocket() {
             return img
         }
-        // ② UIGetScreenImage（私有API）
+        // ② UIGetScreenImage（私有 API）
         if let handle = dlopen(nil, RTLD_NOW) {
             if let fn = dlsym(handle, "UIGetScreenImage") {
                 typealias GetScreenFn = @convention(c) () -> Unmanaged<UIImage>?
@@ -61,61 +56,51 @@ struct ScreenCapture {
                 dlclose(handle)
             }
         }
-        // ③ 降级：本app截图
+        // ③ 降级：本 app 截图
         guard let w = UIApplication.shared.windows.first else { return nil }
         let r = UIGraphicsImageRenderer(bounds: w.bounds)
         return r.image { _ in w.drawHierarchy(in: w.bounds, afterScreenUpdates: false) }
     }
 
-    /// activator 触发系统截图 → 等待保存 → 取相册最新照片
-    private static func captureViaActivator() -> UIImage? {
-        // 触发系统截图 (等同 Home+Lock)
-        shell("su mobile -c 'activator send libactivator.system.screenshot'")
+    // MARK: - SpringBoard Socket 截图
 
-        // 等待 SpringBoard 完成截图保存
-        usleep(1500000) // 1.5s
+    private static let sockPath = "/var/mobile/Library/HOKAuto/cap.sock"
 
-        return fetchLatestPhoto()
-    }
+    private static func captureViaSocket() -> UIImage? {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { return nil }
 
-    /// 取相册最新一张照片
-    private static func fetchLatestPhoto() -> UIImage? {
-        let sem = DispatchSemaphore(value: 0)
-        var result: UIImage?
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        strncpy(&addr.sun_path.0, sockPath, MemoryLayout.size(ofValue: addr.sun_path) - 1)
 
-        let opts = PHFetchOptions()
-        opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        opts.fetchLimit = 1
-
-        let assets = PHAsset.fetchAssets(with: .image, options: opts)
-        guard let latest = assets.firstObject else { return nil }
-
-        let reqOpts = PHImageRequestOptions()
-        reqOpts.isSynchronous = false
-        reqOpts.deliveryMode = .highQualityFormat
-
-        PHImageManager.default().requestImage(
-            for: latest,
-            targetSize: PHImageManagerMaximumSize,
-            contentMode: .default,
-            options: reqOpts
-        ) { image, _ in
-            result = image
-            sem.signal()
+        let ret = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
         }
-        _ = sem.wait(timeout: .now() + 2)
-        return result
+        guard ret >= 0 else { close(fd); return nil }
+
+        // 读 4 字节长度
+        var len: UInt32 = 0
+        guard read(fd, &len, 4) == 4, len > 0, len < 5_000_000 else {
+            close(fd); return nil
+        }
+
+        // 读 JPEG 数据
+        var data = Data(count: Int(len))
+        let bytesRead = data.withUnsafeMutableBytes { buf in
+            read(fd, buf.baseAddress!, Int(len))
+        }
+        close(fd)
+
+        guard bytesRead == Int(len), let img = UIImage(data: data) else { return nil }
+        Logger.log("Socket截图 \(Int(img.size.width))x\(Int(img.size.height))")
+        return img
     }
 
-    private static func shell(_ cmd: String) {
-        let a: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sh"), strdup("-c"), strdup(cmd), nil]
-        defer { a.forEach { if let p = $0 { free(p) } } }
-        var pid: pid_t = 0
-        posix_spawn(&pid, "/bin/sh", nil, nil, a, nil)
-        var s: Int32 = 0; waitpid(pid, &s, 0)
-    }
+    // MARK: - 图像优化
 
-    /// 缩放 + JPEG压缩
     static func optimize(_ image: UIImage, maxWidth: CGFloat, quality: CGFloat) -> UIImage {
         let scale = min(maxWidth / image.size.width, 1.0)
         let newW = Int(image.size.width * scale)
