@@ -268,7 +268,8 @@ struct ContentView: View {
         FloatingHUD.shared.onSave = { name in _ = engine.saveMacro(name: name); refreshMacros() }
         FloatingHUD.shared.onStop = { stopEngine() }
         FloatingHUD.shared.onStopRecord = {
-            if let name = engine.saveMacro(name: "rec_\(Int(Date().timeIntervalSince1970))") {
+            let name = "rec_\(Int(Date().timeIntervalSince1970))"
+            if engine.saveMacro(name: name) {
                 logs = engine.logs + "\n>>> 录制已保存: \(name)\n"
             }
             MacroRecorder.isRecording = false
