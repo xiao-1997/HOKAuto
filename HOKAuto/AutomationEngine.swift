@@ -8,44 +8,40 @@ class AutomationEngine {
 
     private var mainTimer: Timer?
     private var elapsed = 0
-    private var aiCallCount = 0, aiMaxCalls = 5
-    private var lastAICall: Date?
     private var loginTapped = false
 
     // 自适应视觉校验: 5→10→20
-    private var verifyInterval = 5        // 当前校验间隔(轮次)
-    private var consecutiveOk = 0         // 连续成功次数
-    private var tickCount = 0             // 总轮次计数
+    private var verifyInterval = 5
+    private var consecutiveOk = 0
+    private var tickCount = 0
 
-    // 坐标缓存 (优先使用记录的)
+    // 坐标缓存
     private let coordFile = "/tmp/hok_coords.json"
     private var cancelPt: (Float, Float) = (1340, 732)
     private var loginPt:  (Float, Float) = (1209, 945)
     private var closePts: [(Float, Float)] = [(1896,124),(1898,146),(1876,99),(2066,146),(2062,158),(1901,110)]
     private var priorityPts: [(Float, Float)] = [(1000,500),(1100,550)]
-    private var knownPopups: [String: (Float, Float)] = [:]  // 已知弹窗位置(OCR文本→坐标)
+    private var knownPopups: [String: (Float, Float)] = [:]
     private let imgDir = "/var/mobile/Documents/HOKAuto/Images"
+
+    // 本地OCR调用限频
+    private var lastLocalScan: Date?
 
     // MARK: - Run
 
     func run() {
         guard !isRunning else { return }
-        aiCallCount = 0; lastAICall = nil; elapsed = 0; loginTapped = false
+        elapsed = 0; loginTapped = false; lastLocalScan = nil
         tickCount = 0; verifyInterval = 5; consecutiveOk = 0
-        loadCoords() // 加载缓存的坐标
+        loadCoords()
         isRunning = true; status = "启动中"; logs = ""; onUpdate?()
         Logger.log("=== HOK Auto ===")
 
         try? FileManager.default.createDirectory(atPath: imgDir, withIntermediateDirectories: true)
         migrateImages()
 
-        status = "AI检测..."
-        DispatchQueue.global().async {
-            let sem = DispatchSemaphore(value: 0)
-            DeepSeekClient.chat("ping") { _ in sem.signal() }
-            _ = sem.wait(timeout: .now() + 2)
-            DispatchQueue.main.async { self.launch() }
-        }
+        status = "本地识别"
+        DispatchQueue.main.async { self.launch() }
     }
 
     private func launch() {
@@ -76,12 +72,11 @@ class AutomationEngine {
             verifyButtons()
         }
 
-        // ⑤ AI (每15s一次)
+        // ⑤ 本地OCR扫描 (每15s一次，非校验轮)
         let now = Date()
-        if aiCallCount < aiMaxCalls,
-           lastAICall == nil || now.timeIntervalSince(lastAICall!) >= 15,
-           !needVerify {  // 非校验轮才调AI节省成本
-            triggerAI()
+        if !needVerify,
+           lastLocalScan == nil || now.timeIntervalSince(lastLocalScan!) >= 15 {
+            triggerLocalOCR()
         }
 
         // ⑥ 登录(缓存坐标)
@@ -90,9 +85,9 @@ class AutomationEngine {
             Logger.log("登录: (\(Int(loginPt.0)),\(Int(loginPt.1)))")
         }
 
-        // ⑦ 30s未登录→AI重录坐标
-        if elapsed >= 30, !loginTapped, aiCallCount < aiMaxCalls {
-            forceAIRecord()
+        // ⑦ 30s未登录→本地OCR重录坐标
+        if elapsed >= 30, !loginTapped {
+            forceLocalRecord()
         }
 
         if elapsed >= 100 { stop() }
@@ -120,24 +115,23 @@ class AutomationEngine {
 
     func saveMacro(name: String) -> Bool { MacroRecorder.save(name) }
 
-    // MARK: - 自适应视觉校验
+    // MARK: - 自适应视觉校验（纯本地OCR）
 
     private func verifyButtons() {
         guard let screen = ScreenCapture.capture(maxWidth: 600, quality: 0.4) else { verificationFailed(); return }
-        let imgW = Float(screen.size.width * screen.scale)
-        let imgH = Float(screen.size.height * screen.scale)
 
-        // 先尝试已知弹窗位置(不重复识别)
+        // 先尝试已知弹窗位置
         for (label, pt) in knownPopups {
             click(pt.0, pt.1); usleep(300000)
             Logger.log("已知弹窗:\(label)")
         }
 
-        let ocrHits = LocalVision.detectKeywords(screen)
-        if ocrHits.contains(where: { $0.text.contains("关闭")||$0.text.contains("取消")||$0.text.contains("登录") }) {
-            for h in ocrHits {
+        // 关键词快速命中
+        let kwHits = LocalVision.detectKeywords(screen)
+        let targetKW = ["关闭","取消","登录","确定"]
+        if kwHits.contains(where: { h in targetKW.contains(where: { h.text.contains($0) }) }) {
+            for h in kwHits {
                 click(h.x, h.y); usleep(200000)
-                // 记录新弹窗位置
                 if !knownPopups.keys.contains(h.text) {
                     knownPopups[h.text] = (h.x, h.y)
                     Logger.log("新弹窗记录:\(h.text) (\(Int(h.x)),\(Int(h.y)))")
@@ -146,21 +140,20 @@ class AutomationEngine {
             verificationPassed(); return
         }
 
-        // OCR未命中→V4-Pro
-        let prompt = "截图(\(Int(imgW))x\(Int(imgH)))。返回JSON:{\"close_button\":{\"x\":0,\"y\":0},\"cancel_button\":{\"x\":0,\"y\":0}}"
-        DeepSeekClient.analyze(image: screen, prompt: prompt) { r in
-            var found = false
-            if case .success(let t) = r {
-                let sx: Float = 1242/imgW, sy: Float = 2208/imgH
-                for (k,label) in [("close_button","关闭"),("cancel_button","取消")] {
-                    if let cx = self.extractCoord(t,k,"x"), let cy = self.extractCoord(t,k,"y"), cx>0,cy>0 {
-                        self.click(cx*sx, cy*sy); found = true
-                        Logger.log("校验V4-Pro:\(label)")
-                    }
-                }
+        // 关键词未命中→全量OCR扫描
+        let all = LocalVision.ocrSync(image: screen)
+        for (text, rect) in all {
+            if targetKW.contains(where: { text.contains($0) }) {
+                let x = Float(rect.midX * 1242)
+                let y = Float(rect.midY * 2208)
+                click(x, y); usleep(200000)
+                knownPopups[text] = (x, y)
+                Logger.log("全量OCR命中:\(text) (\(Int(x)),\(Int(y)))")
+                verificationPassed(); return
             }
-            found ? self.verificationPassed() : self.verificationFailed()
         }
+
+        verificationFailed()
     }
 
     private func verificationPassed() {
@@ -201,90 +194,64 @@ class AutomationEngine {
         }
     }
 
-    // 30s未完成任务→AI重录
-    private func forceAIRecord() {
-        aiCallCount += 1; lastAICall = Date()
-        Logger.log("30s未完成→AI重录")
-        guard let img = ScreenCapture.capture(maxWidth: 600, quality: 0.4) else { return }
-        let imgW = Float(img.size.width * img.scale)
-        let imgH = Float(img.size.height * img.scale)
+    // MARK: - 本地OCR扫描
 
-        DeepSeekClient.analyze(image: img,
-            prompt: "截图(\(Int(imgW))x\(Int(imgH)))。返回所有按钮坐标JSON:{\"cancel\":[x,y],\"login\":[x,y],\"close\":[[x,y]]}") { r in
-            if case .success(let t) = r {
-                let sx: Float = 1242/imgW, sy: Float = 2208/imgH
-                if let cx = self.extractArr(t, "cancel"), let cy = self.extractArr(t, "cancel", idx: 1) {
-                    self.cancelPt = (cx*sx, cy*sy)
-                }
-                if let lx = self.extractArr(t, "login"), let ly = self.extractArr(t, "login", idx: 1) {
-                    self.loginPt = (lx*sx, ly*sy)
-                }
-                self.saveCoords()
-                Logger.log("AI重录完成")
-            }
-        }
-    }
-
-    // 解析JSON数组坐标: "cancel":[200,380]
-    private func extractArr(_ t: String, _ k: String, idx: Int = 0) -> Float? {
-        let pattern = "\"\(k)\":\\s*\\[[^\\]]*\\]"
-        guard let range = t.range(of: pattern, options: .regularExpression) else { return nil }
-        let arr = String(t[range])
-        let nums = arr.components(separatedBy: CharacterSet(charactersIn: "[], ")).filter { !$0.isEmpty }
-        guard idx < nums.count, let val = Float(nums[idx]) else { return nil }
-        return val
-    }
-
-    // MARK: - V4 Pro 视觉识别
-
-    private func triggerAI() {
-        guard aiCallCount < aiMaxCalls else { return }
-        if let last = lastAICall, Date().timeIntervalSince(last) < 15 { return }
-        aiCallCount += 1; lastAICall = Date()
-        Logger.log("V4-Pro \(aiCallCount)/\(aiMaxCalls)")
+    /// 定期全量OCR扫描，发现弹窗按钮即点击
+    private func triggerLocalOCR() {
+        lastLocalScan = Date()
+        Logger.log("本地OCR扫描")
 
         guard let img = ScreenCapture.capture(maxWidth: 600, quality: 0.4) else { return }
-        let imgW = Float(img.size.width * img.scale)
-        let imgH = Float(img.size.height * img.scale)
+        let results = LocalVision.ocrSync(image: img)
 
-        let prompt = """
-        王者荣耀横屏截图(\(Int(imgW))x\(Int(imgH)))。找到弹窗上的按钮并返回JSON坐标:
-        {"cancel_button":{"x":0,"y":0},"close_button":{"x":0,"y":0},"skip_button":{"x":0,"y":0}}
-        没有某按钮则填null。原点左上角。
-        """
+        if results.isEmpty { Logger.log("本地OCR: 无文字"); return }
 
-        DeepSeekClient.analyze(image: img, prompt: prompt) { r in
-            if case .success(let t) = r {
-                Logger.log("V4-Pro: \(t.prefix(120))")
-
-                // 坐标映射: 图片 → 屏幕 (1242x2208)
-                let sw: Float = 1242, sh: Float = 2208
-                let sx = sw / imgW, sy = sh / imgH
-
-                // 解析按钮坐标
-                let btns: [(String, String)] = [("cancel_button","取消"),("close_button","关闭"),("skip_button","暂不参与")]
-                for (key, label) in btns {
-                    if let cx = self.extractCoord(t, key, "x"),
-                       let cy = self.extractCoord(t, key, "y") {
-                        let mx = cx * sx, my = cy * sy
-                        if mx > 0, my > 0 {
-                            DispatchQueue.main.async {
-                                self.click(mx, my)
-                                Logger.log("V4-Pro点击:\(label) (\(Int(mx)),\(Int(my)))")
-                            }
-                        }
-                    }
+        let targetKW = ["取消", "关闭", "暂不", "确定", "登录", "X"]
+        var hitCount = 0
+        for (text, rect) in results {
+            if targetKW.contains(where: { text.contains($0) }) {
+                let x = Float(rect.midX * 1242)
+                let y = Float(rect.midY * 2208)
+                if x > 0, y > 0 {
+                    click(x, y); usleep(150000)
+                    Logger.log("本地OCR点击:\(text) (\(Int(x)),\(Int(y)))")
+                    hitCount += 1
                 }
             }
         }
+        if hitCount == 0 { Logger.log("本地OCR: 未命中关键词") }
     }
 
-    /// 解析嵌套JSON坐标: "cancel_button":{"x":200,"y":380} → Float
-    private func extractCoord(_ t: String, _ btn: String, _ axis: String) -> Float? {
-        let pattern = "\"\(btn)\"[^}]*\"\(axis)\":\\s*(\\d+)"
-        guard let r = t.range(of: pattern, options: .regularExpression),
-              let n = t[r].range(of: "\\d+", options: .regularExpression) else { return nil }
-        return Float(t[n])
+    /// 30s未登录→本地OCR重录坐标
+    private func forceLocalRecord() {
+        lastLocalScan = Date()
+        Logger.log("本地OCR重录坐标")
+
+        guard let img = ScreenCapture.capture(maxWidth: 600, quality: 0.4) else { return }
+        let results = LocalVision.ocrSync(image: img)
+
+        var foundCancel = false, foundLogin = false
+        for (text, rect) in results {
+            let x = Float(rect.midX * 1242)
+            let y = Float(rect.midY * 2208)
+            if x <= 0 || y <= 0 { continue }
+
+            if text.contains("取消") && !foundCancel {
+                cancelPt = (x, y); foundCancel = true
+            } else if text.contains("登录") && !foundLogin {
+                loginPt = (x, y); foundLogin = true
+            } else if text.contains("关闭") {
+                if !closePts.contains(where: { abs($0.0-x)<5 && abs($0.1-y)<5 }) {
+                    closePts.append((x, y))
+                }
+            }
+        }
+        if foundCancel || foundLogin {
+            saveCoords()
+            Logger.log("本地重录完成 取消(\(Int(cancelPt.0)),\(Int(cancelPt.1))) 登录(\(Int(loginPt.0)),\(Int(loginPt.1)))")
+        } else {
+            Logger.log("本地重录: 未找到按钮")
+        }
     }
 
     // MARK: - Helpers
