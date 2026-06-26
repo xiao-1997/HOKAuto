@@ -99,7 +99,7 @@ typedef kern_return_t (*IOMobileFramebufferGetLayerDefaultSurface_t)(
 CGImageRef ve_capture_screen(void) {
     // 打开 IOMobileFramebuffer 服务
     io_service_t fb = IOServiceGetMatchingService(
-        kIOMasterPortDefault,
+        kIOMainPortDefault,
         IOServiceMatching("IOMobileFramebuffer"));
     if (!MACH_PORT_VALID(fb)) {
         printf("[capture] IOMobileFramebuffer service not found\n");
