@@ -125,7 +125,7 @@ class CoordCache {
 
     // MARK: - 持久化
 
-    private func save() {
+    func save() {
         let snapshot = entries
         DispatchQueue.global().async {
             let encoder = JSONEncoder()

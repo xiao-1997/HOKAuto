@@ -272,7 +272,7 @@ class AutomationEngine {
         isExecutingTask = true
         status = "任务中"; onUpdate?()
         executor = TaskExecutor(engine: self, yolo: yolo, semantic: semantic, cache: cache)
-        executor?.run(steps, onProgress: { progress in
+        executor?.run(steps: steps, onProgress: { progress in
             FloatingHUD.shared.showTaskProgress(progress)
         }, completion: { result in
             self.isExecutingTask = false

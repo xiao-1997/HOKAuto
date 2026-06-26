@@ -217,17 +217,31 @@ struct ContentView: View {
     private var coordEditorView: some View {
         NavigationView {
             VStack {
-                Text("每行一个坐标: label,x,y,source\n例: 关闭弹窗,1896,124,manual")
+                Text("JSON格式坐标预设，编辑后点导入")
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundColor(.gray)
                     .padding(.top, 8)
 
-                TextEditor(text: $coordJSON)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(Color(hex: "00FF88"))
-                    .background(Color(hex: "1A1A2E"))
-                    .cornerRadius(8)
+                if #available(iOS 14.0, *) {
+                    TextEditor(text: $coordJSON)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(Color(hex: "00FF88"))
+                        .background(Color(hex: "1A1A2E"))
+                        .cornerRadius(8)
+                        .padding(.horizontal, 8)
+                } else {
+                    ScrollView {
+                        Text(coordJSON)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(Color(hex: "00FF88"))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12)
+                            .background(Color(hex: "1A1A2E"))
+                            .cornerRadius(8)
+                    }
                     .padding(.horizontal, 8)
+                    .frame(maxHeight: 200)
+                }
 
                 HStack {
                     Button("导入") {
