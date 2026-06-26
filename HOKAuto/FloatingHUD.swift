@@ -1,63 +1,84 @@
 import UIKit
 
-/// 悬浮窗 - 显示操作步骤和识别状态
+/// 悬浮窗 - 显示状态 + 停止/停止录制按钮
 class FloatingHUD {
     static let shared = FloatingHUD()
 
     private var window: UIWindow?
     private var stepLabel: UILabel!
     private var statusLabel: UILabel!
-    private var loadingDot: UIView!
+    private var stopBtn: UIButton!
+    private var stopRecordBtn: UIButton!
+
+    /// 按钮回调
+    var onStop: (() -> Void)?
+    var onStopRecord: (() -> Void)?
 
     private init() {}
 
     func show() {
         guard window == nil else { return }
 
-        let w = UIScreen.main.bounds.width
-        let hudW: CGFloat = min(w - 40, 320)
-        let hudH: CGFloat = 70
+        let screenW = UIScreen.main.bounds.width
+        let hudW: CGFloat = min(screenW - 40, 300)
+        let hudH: CGFloat = 110
 
         let vc = UIViewController()
         vc.view.backgroundColor = .clear
 
-        let container = UIView(frame: CGRect(x: (w - hudW)/2, y: 60, width: hudW, height: hudH))
-        container.backgroundColor = UIColor(white: 0, alpha: 0.8)
-        container.layer.cornerRadius = 12
+        let container = UIView(frame: CGRect(x: (screenW - hudW)/2, y: 50, width: hudW, height: hudH))
+        container.backgroundColor = UIColor(white: 0, alpha: 0.82)
+        container.layer.cornerRadius = 14
         container.clipsToBounds = true
 
         // 步骤标签(顶部)
-        stepLabel = UILabel(frame: CGRect(x: 12, y: 8, width: hudW - 24, height: 20))
-        stepLabel.font = .systemFont(ofSize: 13, weight: .medium)
-        stepLabel.textColor = .white
+        stepLabel = UILabel(frame: CGRect(x: 12, y: 10, width: hudW - 24, height: 18))
+        stepLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        stepLabel.textColor = UIColor(white: 1, alpha: 0.7)
         stepLabel.text = "就绪"
         container.addSubview(stepLabel)
 
-        // 状态标签(底部)
-        statusLabel = UILabel(frame: CGRect(x: 12, y: 32, width: hudW - 40, height: 28))
+        // 状态标签(中间)
+        statusLabel = UILabel(frame: CGRect(x: 12, y: 30, width: hudW - 24, height: 24))
         statusLabel.font = .systemFont(ofSize: 15, weight: .bold)
         statusLabel.textColor = UIColor(red: 0, green: 1, blue: 0.53, alpha: 1)
-        statusLabel.text = "等待操作..."
+        statusLabel.text = "等待..."
         container.addSubview(statusLabel)
 
-        // 加载圆点
-        loadingDot = UIView(frame: CGRect(x: hudW - 28, y: 36, width: 12, height: 12))
-        loadingDot.backgroundColor = .clear
-        loadingDot.layer.cornerRadius = 6
-        container.addSubview(loadingDot)
+        // 按钮行
+        let btnY: CGFloat = 60
+        let btnH: CGFloat = 36
+        let btnW = (hudW - 36) / 2
+
+        // 停止录制按钮（左）
+        stopRecordBtn = UIButton(frame: CGRect(x: 12, y: btnY, width: btnW, height: btnH))
+        stopRecordBtn.setTitle("🔴 停止录制", for: .normal)
+        stopRecordBtn.titleLabel?.font = .systemFont(ofSize: 13, weight: .medium)
+        stopRecordBtn.setTitleColor(.white, for: .normal)
+        stopRecordBtn.backgroundColor = UIColor(red: 0.9, green: 0.3, blue: 0.2, alpha: 0.8)
+        stopRecordBtn.layer.cornerRadius = 8
+        stopRecordBtn.addTarget(self, action: #selector(tapStopRecord), for: .touchUpInside)
+        container.addSubview(stopRecordBtn)
+
+        // 停止按钮（右）
+        stopBtn = UIButton(frame: CGRect(x: 24 + btnW, y: btnY, width: btnW, height: btnH))
+        stopBtn.setTitle("⏹ 停止", for: .normal)
+        stopBtn.titleLabel?.font = .systemFont(ofSize: 13, weight: .medium)
+        stopBtn.setTitleColor(.white, for: .normal)
+        stopBtn.backgroundColor = UIColor(white: 0.3, alpha: 0.8)
+        stopBtn.layer.cornerRadius = 8
+        stopBtn.addTarget(self, action: #selector(tapStop), for: .touchUpInside)
+        container.addSubview(stopBtn)
 
         vc.view.addSubview(container)
 
         window = UIWindow(frame: UIScreen.main.bounds)
-        // 最高层级确保在游戏上方
         window?.windowLevel = UIWindow.Level(rawValue: CGFloat.greatestFiniteMagnitude)
         window?.rootViewController = vc
         window?.isHidden = false
-        window?.isUserInteractionEnabled = false
+        window?.isUserInteractionEnabled = true  // 可交互
         window?.backgroundColor = .clear
         window?.makeKeyAndVisible()
-
-        // 防止被其他窗口覆盖
         window?.isOpaque = false
     }
 
@@ -66,10 +87,28 @@ class FloatingHUD {
         window = nil
     }
 
+    // MARK: - 按钮动作
+
+    @objc private func tapStop() {
+        onStop?()
+    }
+
+    @objc private func tapStopRecord() {
+        onStopRecord?()
+        stopRecordBtn.setTitle("🔴 已停", for: .normal)
+        stopRecordBtn.alpha = 0.5
+        stopRecordBtn.isEnabled = false
+        // 3秒恢复
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            self?.stopRecordBtn.setTitle("🔴 停止录制", for: .normal)
+            self?.stopRecordBtn.alpha = 1.0
+            self?.stopRecordBtn.isEnabled = true
+        }
+    }
+
     // MARK: - 录制保存
 
     var onSave: ((String) -> Void)?
-    private var saveField: UITextField?
 
     func showSaveDialog() {
         let alert = UIAlertController(title: "保存本次操作", message: "输入文件名", preferredStyle: .alert)
@@ -108,7 +147,6 @@ class FloatingHUD {
             self.stepLabel?.textColor = success ?
                 UIColor(red: 0, green: 1, blue: 0.53, alpha: 1) :
                 UIColor(red: 1, green: 0.6, blue: 0, alpha: 1)
-            // 3秒后恢复
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                 self.stepLabel?.text = "检测中..."
                 self.stepLabel?.textColor = .white
@@ -118,7 +156,6 @@ class FloatingHUD {
 
     // MARK: - 任务进度
 
-    /// 显示任务执行进度
     func showTaskProgress(_ progress: TaskProgress) {
         DispatchQueue.main.async {
             self.stepLabel?.text = "任务 [\(progress.stepIndex)/\(progress.totalSteps)] \(progress.stepDesc)"
@@ -128,7 +165,6 @@ class FloatingHUD {
         }
     }
 
-    /// 显示任务结果
     func showTaskResult(_ result: TaskResult) {
         DispatchQueue.main.async {
             if result.success {
@@ -140,7 +176,6 @@ class FloatingHUD {
                 self.stepLabel?.textColor = UIColor(red: 1, green: 0.6, blue: 0, alpha: 1)
                 self.statusLabel?.text = result.errorMessage ?? "未知错误"
             }
-            // 3秒后恢复
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                 self.stepLabel?.text = "守护中..."
                 self.stepLabel?.textColor = .white
