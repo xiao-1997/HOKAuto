@@ -32,7 +32,7 @@ struct ScreenCapture {
     /// 保存图片到系统相册（调试用）
     static func saveToAlbum(_ image: UIImage) {
         PHPhotoLibrary.requestAuthorization { status in
-            guard status == .authorized || status == .limited else {
+            guard status == .authorized else {
                 Logger.log("相册权限未授权")
                 return
             }
